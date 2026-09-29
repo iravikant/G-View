@@ -1,0 +1,1276 @@
+# GalleryApp source snapshot
+
+===== app/src/main/java/com/acoder/gallery/GalleryApplication.kt =====
+package com.acoder.gallery
+
+import android.app.Application
+import dagger.hilt.android.HiltAndroidApp
+
+@HiltAndroidApp
+class GalleryApplication : Application()
+
+===== app/src/main/java/com/acoder/gallery/MainActivity.kt =====
+package com.acoder.gallery
+
+import android.os.Bundle
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
+import dagger.hilt.android.AndroidEntryPoint
+import com.acoder.gallery.presentation.home.GalleryApp
+
+@AndroidEntryPoint
+class MainActivity : ComponentActivity() {
+    override fun onCreate(savedInstanceState: Bundle?) { super.onCreate(savedInstanceState); enableEdgeToEdge(); setContent { GalleryApp() } }
+}
+
+===== app/src/main/java/com/acoder/gallery/core/collage/CollageGenerator.kt =====
+package com.acoder.gallery.core.collage
+import android.content.Context
+import android.graphics.*
+import android.net.Uri
+import java.io.File
+import java.io.FileOutputStream
+object CollageGenerator {
+ fun generate(context:Context,uris:List<Uri>,columns:Int=2,spacing:Int=8,corner:Int=20):File {val size=1080;val rows=kotlin.math.ceil(uris.size/columns.toDouble()).toInt().coerceAtLeast(1);val cell=(size-spacing*(columns+1))/columns;val h=rows*cell+spacing*(rows+1);val out=Bitmap.createBitmap(size,h,Bitmap.Config.ARGB_8888);val canvas=Canvas(out);canvas.drawColor(Color.WHITE);val paint=Paint(Paint.ANTI_ALIAS_FLAG);uris.forEachIndexed{i,uri->decode(context,uri,cell)?.let{bmp->val l=spacing+(i%columns)*(cell+spacing);val t=spacing+(i/columns)*(cell+spacing);val dst=Rect(l,t,l+cell,t+cell);val path=Path().apply{addRoundRect(RectF(dst),corner.toFloat(),corner.toFloat(),Path.Direction.CW)};canvas.save();canvas.clipPath(path);canvas.drawBitmap(bmp,null,dst,paint);canvas.restore();bmp.recycle()}};val dir=File(context.cacheDir,"shared").apply{mkdirs()};val f=File(dir,"Collage_${System.currentTimeMillis()}.jpg");FileOutputStream(f).use{out.compress(Bitmap.CompressFormat.JPEG,94,it)};out.recycle();return f}
+ private fun decode(context:Context,uri:Uri,max:Int):Bitmap? {
+  val r=context.contentResolver; val bounds=BitmapFactory.Options().apply{inJustDecodeBounds=true}; r.openInputStream(uri)?.use{BitmapFactory.decodeStream(it,null,bounds)} ?: return null
+  if(bounds.outWidth<=0||bounds.outHeight<=0)return null
+  val sample=kotlin.math.max(1,kotlin.math.min(bounds.outWidth/max,bounds.outHeight/max)); return r.openInputStream(uri)?.use{BitmapFactory.decodeStream(it,null,BitmapFactory.Options().apply{inSampleSize=sample;inPreferredConfig=Bitmap.Config.ARGB_8888})}
+ }
+}
+
+===== app/src/main/java/com/acoder/gallery/core/editor/ImageEditor.kt =====
+package com.acoder.gallery.core.editor
+import android.graphics.*
+import kotlin.math.max
+class ImageEditor(private val original:Bitmap) {
+ data class State(val brightness:Float=0f,val contrast:Float=1f,val saturation:Float=1f,val sharpness:Float=0f,val definition:Float=0f,val shadows:Float=0f,val highlights:Float=0f,val blackPoint:Float=0f,val exposure:Float=0f,val temperature:Float=0f,val rotation:Int=0,val flipX:Boolean=false,val flipY:Boolean=false,val crop:RectF?=null)
+ fun render(s:State):Bitmap {
+  val matrix=ColorMatrix(); matrix.setSaturation(s.saturation)
+  val contrast=(s.contrast + s.sharpness*0.25f).coerceIn(0.1f,2.5f); val exposure=s.exposure*80f+s.brightness*255f+s.shadows*25f-s.highlights*25f; val warm=s.temperature*20f; val bp=s.blackPoint*50f; matrix.setSaturation((s.saturation+s.definition*0.15f).coerceIn(0f,2.5f))
+  matrix.postConcat(ColorMatrix(floatArrayOf(contrast,0f,0f,0f,exposure+warm,0f,contrast,0f,0f,exposure,0f,0f,contrast,0f,exposure-warm-bp,0f,0f,0f,1f,0f)))
+  val base=Bitmap.createBitmap(original.width,original.height,Bitmap.Config.ARGB_8888); Canvas(base).drawBitmap(original,0f,0f,Paint(Paint.ANTI_ALIAS_FLAG).apply{colorFilter=ColorMatrixColorFilter(matrix)})
+  val transformed=Bitmap.createBitmap(base,0,0,base.width,base.height,Matrix().apply{postRotate(s.rotation.toFloat());postScale(if(s.flipX)-1f else 1f,if(s.flipY)-1f else 1f)},true); if(transformed!==base)base.recycle()
+  val cropped=s.crop?.let{Bitmap.createBitmap(transformed,max(0,it.left.toInt()),max(0,it.top.toInt()),it.width().toInt().coerceAtMost(transformed.width),it.height().toInt().coerceAtMost(transformed.height))}?:transformed
+  if(cropped!==transformed)transformed.recycle(); return cropped
+ }
+}
+
+===== app/src/main/java/com/acoder/gallery/core/media/MediaOperationWorker.kt =====
+package com.acoder.gallery.core.media
+import android.content.Context
+import android.net.Uri
+import androidx.documentfile.provider.DocumentFile
+import androidx.work.CoroutineWorker
+import androidx.work.WorkerParameters
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+class MediaOperationWorker(app:Context,params:WorkerParameters):CoroutineWorker(app,params){
+ override suspend fun doWork()=withContext(Dispatchers.IO){ try{ val mode=inputData.getString("mode")?:return@withContext androidx.work.ListenableWorker.Result.failure(); val dest=DocumentFile.fromTreeUri(applicationContext,Uri.parse(inputData.getString("dest")?:return@withContext androidx.work.ListenableWorker.Result.failure()) )?:return@withContext androidx.work.ListenableWorker.Result.failure(); val uris=inputData.getStringArray("uris")?:emptyArray(); uris.forEachIndexed{i,s-> val src=Uri.parse(s); val resolver=applicationContext.contentResolver; val name=resolver.query(src,arrayOf(android.provider.OpenableColumns.DISPLAY_NAME),null,null,null)?.use{if(it.moveToFirst())it.getString(0)else"file_$i"}?:"file_$i"; val mime=resolver.getType(src)?:"application/octet-stream"; val file=dest.createFile(mime,name)?:return@withContext androidx.work.ListenableWorker.Result.failure(); resolver.openInputStream(src)?.use{input->resolver.openOutputStream(file.uri)?.use{output->input.copyTo(output)}}; if(mode=="move") resolver.delete(src,null,null) }; androidx.work.ListenableWorker.Result.success()}catch(_:Exception){androidx.work.ListenableWorker.Result.failure()} }
+}
+
+===== app/src/main/java/com/acoder/gallery/core/pdf/PdfGenerator.kt =====
+package com.acoder.gallery.core.pdf
+import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.pdf.PdfDocument
+import android.net.Uri
+import java.io.File
+import java.io.FileOutputStream
+object PdfGenerator {
+ data class Options(val pageWidth:Int=595,val pageHeight:Int=842,val quality:Int=90)
+ fun generate(context:Context,uris:List<Uri>,options:Options=Options()):File {val dir=File(context.cacheDir,"shared").apply{mkdirs()};val file=File(dir,"Gallery_${System.currentTimeMillis()}.pdf");val doc=PdfDocument();uris.forEachIndexed{index,uri->decodeForPage(context,uri,options.pageWidth,options.pageHeight)?.let{bmp->val page=doc.startPage(PdfDocument.PageInfo.Builder(options.pageWidth,options.pageHeight,index+1).create());val scale=minOf(options.pageWidth.toFloat()/bmp.width,options.pageHeight.toFloat()/bmp.height)*.92f;val w=bmp.width*scale;val h=bmp.height*scale;page.canvas.drawBitmap(bmp,null,android.graphics.RectF((options.pageWidth-w)/2,(options.pageHeight-h)/2,(options.pageWidth+w)/2,(options.pageHeight+h)/2),null);doc.finishPage(page);bmp.recycle()}};FileOutputStream(file).use{doc.writeTo(it)};doc.close();return file}
+ private fun decodeForPage(context:Context,uri:Uri,maxW:Int,maxH:Int):Bitmap? {
+  val resolver=context.contentResolver; val bounds=BitmapFactory.Options().apply{inJustDecodeBounds=true}; resolver.openInputStream(uri)?.use{BitmapFactory.decodeStream(it,null,bounds)} ?: return null
+  if(bounds.outWidth<=0||bounds.outHeight<=0)return null
+  val sample=kotlin.math.max(1,kotlin.math.min(bounds.outWidth/maxW,bounds.outHeight/maxH)); val opts=BitmapFactory.Options().apply{inSampleSize=sample;inPreferredConfig=Bitmap.Config.ARGB_8888}; return resolver.openInputStream(uri)?.use{BitmapFactory.decodeStream(it,null,opts)}
+ }
+}
+
+===== app/src/main/java/com/acoder/gallery/core/permissions/PermissionManager.kt =====
+package com.acoder.gallery.core.permissions
+import android.Manifest
+import android.content.Context
+import android.content.pm.PackageManager
+import android.os.Build
+import androidx.core.content.ContextCompat
+object PermissionManager {
+ fun permissions():Array<String> = when { Build.VERSION.SDK_INT>=34->arrayOf(Manifest.permission.READ_MEDIA_IMAGES,Manifest.permission.READ_MEDIA_VIDEO,Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED); Build.VERSION.SDK_INT>=33->arrayOf(Manifest.permission.READ_MEDIA_IMAGES,Manifest.permission.READ_MEDIA_VIDEO); else->arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE) }
+ fun hasFullAccess(c:Context)=permissions().filterNot{it==Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED}.all{ContextCompat.checkSelfPermission(c,it)==PackageManager.PERMISSION_GRANTED}
+ fun hasAnyAccess(c:Context):Boolean= if(Build.VERSION.SDK_INT>=34) hasFullAccess(c)||ContextCompat.checkSelfPermission(c,Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED)==PackageManager.PERMISSION_GRANTED else permissions().all{ContextCompat.checkSelfPermission(c,it)==PackageManager.PERMISSION_GRANTED}
+}
+
+===== app/src/main/java/com/acoder/gallery/core/sharing/ExportManager.kt =====
+package com.acoder.gallery.core.sharing
+import android.content.ContentValues
+import android.content.Context
+import android.os.Build
+import android.os.Environment
+import android.provider.MediaStore
+import java.io.File
+object ExportManager {
+ fun saveToDownloads(context:Context,file:File,mime:String,name:String):android.net.Uri? {
+  if(Build.VERSION.SDK_INT<29){val dir=context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)?:context.cacheDir;val out=File(dir,name);file.inputStream().use{input->out.outputStream().use{input.copyTo(it)}};return MediaShareManager.fileUri(context,out)}
+  val values=ContentValues().apply{put(MediaStore.MediaColumns.DISPLAY_NAME,name);put(MediaStore.MediaColumns.MIME_TYPE,mime);put(MediaStore.MediaColumns.RELATIVE_PATH,"Download/Gallery");put(MediaStore.MediaColumns.IS_PENDING,1)}
+  val uri=context.contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI,values)?:return null
+  return try{context.contentResolver.openOutputStream(uri)?.use{out->file.inputStream().use{it.copyTo(out)}};context.contentResolver.update(uri,ContentValues().apply{put(MediaStore.MediaColumns.IS_PENDING,0)},null,null);uri}catch(e:Exception){context.contentResolver.delete(uri,null,null);null}
+ }
+}
+
+===== app/src/main/java/com/acoder/gallery/core/sharing/MediaShareManager.kt =====
+package com.acoder.gallery.core.sharing
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
+import androidx.core.content.FileProvider
+import java.io.File
+object MediaShareManager {
+ fun share(context:Context, uris:List<Uri>, mime:String="*/*") { val i=if(uris.size==1) Intent(Intent.ACTION_SEND).apply{type=mime;putExtra(Intent.EXTRA_STREAM,uris.first())} else Intent(Intent.ACTION_SEND_MULTIPLE).apply{type=mime;putParcelableArrayListExtra(Intent.EXTRA_STREAM,ArrayList(uris))}; i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION); context.startActivity(Intent.createChooser(i,"Share media")) }
+ fun fileUri(context:Context,file:File):Uri=FileProvider.getUriForFile(context,"${context.packageName}.fileprovider",file)
+}
+
+===== app/src/main/java/com/acoder/gallery/core/util/Formatters.kt =====
+package com.acoder.gallery.core.util
+import java.text.SimpleDateFormat
+import java.util.*
+fun Long.formatBytes():String { if(this<1024)return "$this B"; val k=this/1024.0; if(k<1024)return "%.1f KB".format(k); val m=k/1024; if(m<1024)return "%.1f MB".format(m); return "%.2f GB".format(m/1024) }
+fun Long.formatDuration():String { val s=this/1000; return "%02d:%02d".format(s/60,s%60) }
+fun Long.dateLabel():String { val now=Calendar.getInstance(); val c=Calendar.getInstance().apply{timeInMillis=this@dateLabel}; return when { now.get(Calendar.YEAR)==c.get(Calendar.YEAR)&&now.get(Calendar.DAY_OF_YEAR)==c.get(Calendar.DAY_OF_YEAR)->"Today"; now.apply{add(Calendar.DAY_OF_YEAR,-1)}.get(Calendar.DAY_OF_YEAR)==c.get(Calendar.DAY_OF_YEAR)&&now.get(Calendar.YEAR)==c.get(Calendar.YEAR)->"Yesterday"; else->SimpleDateFormat("dd MMM yyyy",Locale.getDefault()).format(Date(this@dateLabel)) } }
+fun Long.dateTimeLabel()=SimpleDateFormat("dd MMM yyyy, hh:mm a",Locale.getDefault()).format(Date(this))
+
+===== app/src/main/java/com/acoder/gallery/data/mediastore/MediaStorePagingSource.kt =====
+package com.acoder.gallery.data.mediastore
+
+import android.content.ContentResolver
+import android.net.Uri
+import android.provider.MediaStore
+import android.util.Base64
+import androidx.paging.PagingSource
+import androidx.paging.PagingState
+import com.acoder.gallery.domain.model.MediaFilter
+import com.acoder.gallery.domain.model.MediaItem
+import com.acoder.gallery.domain.model.MediaType
+import com.acoder.gallery.domain.model.SortOrder
+
+/**
+ * Cursor-based MediaStore pagination over Images and Video collections.
+ */
+class MediaStorePagingSource(
+    private val resolver: ContentResolver,
+    private val sort: SortOrder,
+    private val filter: MediaFilter,
+    private val query: String,
+    private val albumId: String?
+) : PagingSource<String, MediaItem>() {
+
+    override suspend fun load(params: LoadParams<String>): LoadResult<String, MediaItem> = try {
+        val key = params.key?.split("#", limit = 2)
+        val rawCursor = key?.getOrNull(0)
+        val cursorValue = if (sort == SortOrder.NAME_ASC || sort == SortOrder.NAME_DESC) {
+            rawCursor?.let { String(Base64.decode(it, Base64.NO_WRAP)) }
+        } else {
+            rawCursor
+        }
+        val cursorId = key?.getOrNull(1)?.toLongOrNull()
+        val limit = params.loadSize.coerceIn(30, 60)
+        val candidates = ArrayList<MediaItem>(limit * 2)
+
+        queryTable(
+            MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+            MediaType.IMAGE,
+            cursorValue,
+            cursorId,
+            limit,
+            candidates
+        )
+        queryTable(
+            MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
+            MediaType.VIDEO,
+            cursorValue,
+            cursorId,
+            limit,
+            candidates
+        )
+
+        candidates.sortWith(comparator(sort))
+        val page = candidates.take(limit)
+        val last = page.lastOrNull()
+        val next = last?.let(::cursorFor)
+
+        LoadResult.Page(
+            data = page,
+            prevKey = null,
+            nextKey = if (page.size < limit) null else next
+        )
+    } catch (e: Exception) {
+        LoadResult.Error(e)
+    }
+
+    private fun queryTable(
+        base: Uri,
+        type: MediaType,
+        cursorValue: String?,
+        cursorId: Long?,
+        limit: Int,
+        out: MutableList<MediaItem>
+    ) {
+        val selection = ArrayList<String>()
+        val args = ArrayList<String>()
+
+        if (query.isNotBlank()) {
+            selection += "${MediaStore.MediaColumns.DISPLAY_NAME} LIKE ?"
+            args += "%${query.trim()}%"
+        }
+
+        if (albumId != null && albumId != "RECENT") {
+            selection += "${MediaStore.MediaColumns.BUCKET_ID} = ?"
+            args += albumId
+        }
+
+        if (albumId == "RECENT") {
+            selection += "${MediaStore.MediaColumns.DATE_ADDED} >= ?"
+            args += (System.currentTimeMillis() / 1000 - 7 * 86400).toString()
+        }
+
+        when (filter) {
+            MediaFilter.PHOTOS -> if (type != MediaType.IMAGE) return
+            MediaFilter.VIDEOS -> if (type != MediaType.VIDEO) return
+            MediaFilter.LARGE -> {
+                selection += "${MediaStore.MediaColumns.SIZE} >= ?"
+                args += (25L * 1024 * 1024).toString()
+            }
+            MediaFilter.RECENT -> {
+                selection += "${MediaStore.MediaColumns.DATE_ADDED} >= ?"
+                args += (System.currentTimeMillis() / 1000 - 7 * 86400).toString()
+            }
+            else -> Unit
+        }
+
+        val order = when (sort) {
+            SortOrder.NEWEST, SortOrder.OLDEST ->
+                "${MediaStore.MediaColumns.DATE_MODIFIED} ${if (sort == SortOrder.NEWEST) "DESC" else "ASC"}, " +
+                    "${MediaStore.MediaColumns._ID} ${if (sort == SortOrder.NEWEST) "DESC" else "ASC"}"
+            SortOrder.NAME_ASC ->
+                "${MediaStore.MediaColumns.DISPLAY_NAME} COLLATE NOCASE ASC, ${MediaStore.MediaColumns._ID} ASC"
+            SortOrder.NAME_DESC ->
+                "${MediaStore.MediaColumns.DISPLAY_NAME} COLLATE NOCASE DESC, ${MediaStore.MediaColumns._ID} DESC"
+            SortOrder.SIZE_DESC ->
+                "${MediaStore.MediaColumns.SIZE} DESC, ${MediaStore.MediaColumns._ID} DESC"
+            SortOrder.SIZE_ASC ->
+                "${MediaStore.MediaColumns.SIZE} ASC, ${MediaStore.MediaColumns._ID} ASC"
+            SortOrder.PHOTOS_FIRST, SortOrder.VIDEOS_FIRST ->
+                "${MediaStore.MediaColumns.DATE_MODIFIED} DESC, ${MediaStore.MediaColumns._ID} DESC"
+        }
+
+        if (cursorValue != null) {
+            val column = when (sort) {
+                SortOrder.NEWEST, SortOrder.OLDEST -> MediaStore.MediaColumns.DATE_MODIFIED
+                SortOrder.NAME_ASC, SortOrder.NAME_DESC -> MediaStore.MediaColumns.DISPLAY_NAME
+                SortOrder.SIZE_DESC, SortOrder.SIZE_ASC -> MediaStore.MediaColumns.SIZE
+                else -> MediaStore.MediaColumns.DATE_MODIFIED
+            }
+            val ascending = sort == SortOrder.OLDEST ||
+                sort == SortOrder.NAME_ASC ||
+                sort == SortOrder.SIZE_ASC
+            val operator = if (ascending) ">" else "<"
+            val idOperator = operator
+
+            selection += "($column $operator ? OR ($column = ? AND ${MediaStore.MediaColumns._ID} $idOperator ?))"
+            args += cursorValue
+            args += cursorValue
+            args += cursorId?.toString() ?: "0"
+        }
+
+        val projection = arrayOf(
+            MediaStore.MediaColumns._ID,
+            MediaStore.MediaColumns.DISPLAY_NAME,
+            MediaStore.MediaColumns.DATE_TAKEN,
+            MediaStore.MediaColumns.DATE_ADDED,
+            MediaStore.MediaColumns.DATE_MODIFIED,
+            MediaStore.MediaColumns.SIZE,
+            MediaStore.MediaColumns.WIDTH,
+            MediaStore.MediaColumns.HEIGHT,
+            MediaStore.MediaColumns.MIME_TYPE,
+            MediaStore.MediaColumns.BUCKET_ID,
+            MediaStore.MediaColumns.BUCKET_DISPLAY_NAME,
+            MediaStore.MediaColumns.RELATIVE_PATH,
+            MediaStore.Video.Media.DURATION
+        )
+
+        val sortOrder = if (sort == SortOrder.PHOTOS_FIRST || sort == SortOrder.VIDEOS_FIRST) {
+            "${MediaStore.MediaColumns.DATE_MODIFIED} DESC, ${MediaStore.MediaColumns._ID} DESC"
+        } else {
+            order
+        }
+
+        resolver.query(
+            base,
+            projection,
+            selection.joinToString(" AND ").ifBlank { null },
+            args.toTypedArray().ifEmpty { null },
+            sortOrder
+        )?.use { cursor ->
+            val idIndex = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns._ID)
+            while (cursor.moveToNext()) {
+                val itemId = cursor.getLong(idIndex)
+                out += MediaItem(
+                    id = itemId,
+                    uri = android.content.ContentUris.withAppendedId(base, itemId),
+                    name = cursor.str(MediaStore.MediaColumns.DISPLAY_NAME).orEmpty(),
+                    type = type,
+                    dateTaken = cursor.lng(MediaStore.MediaColumns.DATE_TAKEN),
+                    dateAdded = cursor.lng(MediaStore.MediaColumns.DATE_ADDED),
+                    dateModified = cursor.lng(MediaStore.MediaColumns.DATE_MODIFIED) * 1000,
+                    size = cursor.lng(MediaStore.MediaColumns.SIZE),
+                    width = cursor.int(MediaStore.MediaColumns.WIDTH),
+                    height = cursor.int(MediaStore.MediaColumns.HEIGHT),
+                    duration = cursor.lng(MediaStore.Video.Media.DURATION),
+                    bucketId = cursor.str(MediaStore.MediaColumns.BUCKET_ID),
+                    bucketName = cursor.str(MediaStore.MediaColumns.BUCKET_DISPLAY_NAME),
+                    relativePath = cursor.str(MediaStore.MediaColumns.RELATIVE_PATH),
+                    mimeType = cursor.str(MediaStore.MediaColumns.MIME_TYPE)
+                )
+            }
+        }
+    }
+
+    private fun comparator(sortOrder: SortOrder): Comparator<MediaItem> = when (sortOrder) {
+        SortOrder.NEWEST -> compareByDescending<MediaItem> { it.dateModified }.thenByDescending { it.id }
+        SortOrder.OLDEST -> compareBy<MediaItem> { it.dateModified }.thenBy { it.id }
+        SortOrder.NAME_ASC -> compareBy<MediaItem> { it.name.lowercase() }.thenBy { it.id }
+        SortOrder.NAME_DESC -> compareByDescending<MediaItem> { it.name.lowercase() }.thenByDescending { it.id }
+        SortOrder.SIZE_DESC -> compareByDescending<MediaItem> { it.size }.thenByDescending { it.id }
+        SortOrder.SIZE_ASC -> compareBy<MediaItem> { it.size }.thenBy { it.id }
+        SortOrder.PHOTOS_FIRST -> compareBy<MediaItem> { if (it.isVideo) 1 else 0 }.thenByDescending { it.dateModified }
+        SortOrder.VIDEOS_FIRST -> compareBy<MediaItem> { if (it.isVideo) 0 else 1 }.thenByDescending { it.dateModified }
+    }
+
+    private fun cursorFor(item: MediaItem): String {
+        val value = when (sort) {
+            SortOrder.NEWEST, SortOrder.OLDEST -> item.dateModified.toString()
+            SortOrder.NAME_ASC, SortOrder.NAME_DESC ->
+                Base64.encodeToString(item.name.toByteArray(), Base64.NO_WRAP)
+            SortOrder.SIZE_DESC, SortOrder.SIZE_ASC -> item.size.toString()
+            SortOrder.PHOTOS_FIRST, SortOrder.VIDEOS_FIRST -> item.dateModified.toString()
+        }
+        return "$value#${item.id}"
+    }
+
+    override fun getRefreshKey(state: PagingState<String, MediaItem>): String? = null
+}
+
+private fun android.database.Cursor.str(name: String): String? =
+    getColumnIndex(name).takeIf { it >= 0 && !isNull(it) }?.let(::getString)
+
+private fun android.database.Cursor.lng(name: String): Long =
+    getColumnIndex(name).takeIf { it >= 0 && !isNull(it) }?.let(::getLong) ?: 0L
+
+private fun android.database.Cursor.int(name: String): Int =
+    getColumnIndex(name).takeIf { it >= 0 && !isNull(it) }?.let(::getInt) ?: 0
+
+===== app/src/main/java/com/acoder/gallery/data/mediastore/MediaStoreRepository.kt =====
+package com.acoder.gallery.data.mediastore
+
+import android.content.ContentResolver
+import android.content.ContentUris
+import android.content.Context
+import android.provider.MediaStore
+import android.os.Build
+import android.content.ContentValues
+import android.net.Uri
+import com.acoder.gallery.domain.model.*
+import com.acoder.gallery.domain.repository.MediaRepository
+import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import javax.inject.Inject
+import javax.inject.Singleton
+
+@Singleton
+class MediaStoreRepository @Inject constructor(@ApplicationContext private val context: Context) : MediaRepository {
+    private val resolver: ContentResolver get() = context.contentResolver
+    private val imageUri = MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+    private val videoUri = MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+
+    suspend fun queryMedia(sort: SortOrder = SortOrder.NEWEST, filter: MediaFilter = MediaFilter.ALL, query: String = "", albumId: String? = null): List<MediaItem> = withContext(Dispatchers.IO) {
+        val out = ArrayList<MediaItem>()
+        queryCollection(imageUri, MediaType.IMAGE, sort, filter, query, albumId, out)
+        queryCollection(videoUri, MediaType.VIDEO, sort, filter, query, albumId, out)
+        out.sortWith(comparator(sort))
+        out
+    }
+
+    private fun queryCollection(base: Uri, type: MediaType, sort: SortOrder, filter: MediaFilter, query: String, albumId: String?, out: MutableList<MediaItem>) {
+        val p = arrayListOf<String>(); val a = arrayListOf<String>()
+        if (query.isNotBlank()) { p += "${MediaStore.MediaColumns.DISPLAY_NAME} LIKE ?"; a += "%${query.trim()}%" }
+        if (albumId != null) { p += "${MediaStore.MediaColumns.BUCKET_ID} = ?"; a += albumId }
+        when (filter) {
+            MediaFilter.PHOTOS -> if (type != MediaType.IMAGE) return
+            MediaFilter.VIDEOS -> if (type != MediaType.VIDEO) return
+            MediaFilter.LARGE -> { p += "${MediaStore.MediaColumns.SIZE} >= ?"; a += (25L * 1024 * 1024).toString() }
+            MediaFilter.RECENT -> { p += "${MediaStore.MediaColumns.DATE_ADDED} >= ?"; a += (System.currentTimeMillis()/1000 - 7*86400).toString() }
+            else -> Unit
+        }
+        val projection = arrayOf(MediaStore.MediaColumns._ID, MediaStore.MediaColumns.DISPLAY_NAME, MediaStore.MediaColumns.DATE_TAKEN, MediaStore.MediaColumns.DATE_ADDED, MediaStore.MediaColumns.DATE_MODIFIED, MediaStore.MediaColumns.SIZE, MediaStore.MediaColumns.WIDTH, MediaStore.MediaColumns.HEIGHT, MediaStore.MediaColumns.MIME_TYPE, MediaStore.MediaColumns.BUCKET_ID, MediaStore.MediaColumns.BUCKET_DISPLAY_NAME, MediaStore.MediaColumns.RELATIVE_PATH, MediaStore.Video.Media.DURATION)
+        val order = "${MediaStore.MediaColumns.DATE_MODIFIED} DESC"
+        resolver.query(base, projection, p.joinToString(" AND ").ifBlank { null }, a.toTypedArray().ifEmpty { null }, order)?.use { c ->
+            val id = c.getColumnIndexOrThrow(MediaStore.MediaColumns._ID)
+            while (c.moveToNext()) {
+                val itemId = c.getLong(id); val uri = ContentUris.withAppendedId(base, itemId)
+                out += MediaItem(itemId, uri, c.getStringOrNull(MediaStore.MediaColumns.DISPLAY_NAME).orEmpty(), type,
+                    c.getLongOrZero(MediaStore.MediaColumns.DATE_TAKEN), c.getLongOrZero(MediaStore.MediaColumns.DATE_ADDED), c.getLongOrZero(MediaStore.MediaColumns.DATE_MODIFIED)*1000,
+                    c.getLongOrZero(MediaStore.MediaColumns.SIZE), c.getIntOrZero(MediaStore.MediaColumns.WIDTH), c.getIntOrZero(MediaStore.MediaColumns.HEIGHT), c.getLongOrZero(MediaStore.Video.Media.DURATION),
+                    c.getStringOrNull(MediaStore.MediaColumns.BUCKET_ID), c.getStringOrNull(MediaStore.MediaColumns.BUCKET_DISPLAY_NAME), c.getStringOrNull(MediaStore.MediaColumns.RELATIVE_PATH), c.getStringOrNull(MediaStore.MediaColumns.MIME_TYPE))
+            }
+        }
+    }
+
+    fun pagingSource(sort: SortOrder, filter: MediaFilter, query: String, albumId: String? = null) = MediaStorePagingSource(resolver, sort, filter, query, albumId)
+
+    suspend fun queryAlbums(): List<Album> = withContext(Dispatchers.IO) {
+        val map=LinkedHashMap<String,Pair<Album,Int>>()
+        fun collect(base:Uri){val projection=arrayOf(MediaStore.MediaColumns._ID,MediaStore.MediaColumns.BUCKET_ID,MediaStore.MediaColumns.BUCKET_DISPLAY_NAME,MediaStore.MediaColumns.RELATIVE_PATH);resolver.query(base,projection,null,null,"${MediaStore.MediaColumns.DATE_MODIFIED} DESC")?.use{c->while(c.moveToNext()){val id=c.getStringOrNull(MediaStore.MediaColumns.BUCKET_ID)?:continue;val current=map[id];if(current==null){val mediaId=c.getLong(c.getColumnIndexOrThrow(MediaStore.MediaColumns._ID));val album=Album(id,c.getStringOrNull(MediaStore.MediaColumns.BUCKET_DISPLAY_NAME)?:"Other",1,ContentUris.withAppendedId(base,mediaId),c.getStringOrNull(MediaStore.MediaColumns.RELATIVE_PATH));map[id]=album to 1}else map[id]=current.first to current.second+1}}}
+        collect(imageUri);collect(videoUri); val result=map.values.map{it.first.copy(count=it.second)}.toMutableList();
+        try{val cutoff=System.currentTimeMillis()/1000-7*86400;val projection=arrayOf(MediaStore.MediaColumns._ID,MediaStore.MediaColumns.DATE_ADDED);val recent=ArrayList<Uri>();fun recentCollect(base:Uri){resolver.query(base,projection,"${MediaStore.MediaColumns.DATE_ADDED}>=?",arrayOf(cutoff.toString()),"${MediaStore.MediaColumns.DATE_ADDED} DESC")?.use{c->while(c.moveToNext())recent+=ContentUris.withAppendedId(base,c.getLong(c.getColumnIndexOrThrow(MediaStore.MediaColumns._ID)))}};recentCollect(imageUri);recentCollect(videoUri);if(recent.isNotEmpty())result.add(0,Album("RECENT","Recent",recent.size,recent.first(),null))}catch(_:Exception){};result
+    }
+
+    suspend fun delete(items: List<MediaItem>): Int = withContext(Dispatchers.IO) { var n=0; items.forEach { try { if (resolver.delete(it.uri, null, null)>0) n++ } catch(_:Exception){} }; n }
+
+    suspend fun createPending(name: String, mime: String, relativePath: String = "Pictures/Gallery/"): Uri? = withContext(Dispatchers.IO) {
+        val values = ContentValues().apply { put(MediaStore.MediaColumns.DISPLAY_NAME,name); put(MediaStore.MediaColumns.MIME_TYPE,mime); if (Build.VERSION.SDK_INT>=29) { put(MediaStore.MediaColumns.RELATIVE_PATH,relativePath); put(MediaStore.MediaColumns.IS_PENDING,1) } }
+        resolver.insert(if(mime.startsWith("video")) videoUri else imageUri, values)
+    }
+    suspend fun finishPending(uri: Uri) = withContext(Dispatchers.IO) { if(Build.VERSION.SDK_INT>=29) resolver.update(uri, ContentValues().apply{put(MediaStore.MediaColumns.IS_PENDING,0)},null,null) }
+    suspend fun writeBytes(uri: Uri, bytes: ByteArray) = withContext(Dispatchers.IO) { resolver.openOutputStream(uri)?.use { it.write(bytes) } ?: error("Unable to open output") }
+
+    private fun comparator(s: SortOrder) = when(s) {
+        SortOrder.NEWEST -> compareByDescending<MediaItem>{it.displayDate}
+        SortOrder.OLDEST -> compareBy<MediaItem>{it.displayDate}
+        SortOrder.NAME_ASC -> compareBy{it.name.lowercase()}
+        SortOrder.NAME_DESC -> compareByDescending{it.name.lowercase()}
+        SortOrder.SIZE_DESC -> compareByDescending{it.size}
+        SortOrder.SIZE_ASC -> compareBy{it.size}
+        SortOrder.PHOTOS_FIRST -> compareBy<MediaItem>{if(it.isVideo)1 else 0}.thenByDescending{it.displayDate}
+        SortOrder.VIDEOS_FIRST -> compareBy<MediaItem>{if(it.isVideo)0 else 1}.thenByDescending{it.displayDate}
+    }
+}
+private fun android.database.Cursor.getStringOrNull(name:String)=getColumnIndex(name).takeIf{it>=0}?.let{getString(it)}
+private fun android.database.Cursor.getLongOrZero(name:String)=getColumnIndex(name).takeIf{it>=0 && !isNull(it)}?.let{getLong(it)}?:0L
+private fun android.database.Cursor.getIntOrZero(name:String)=getColumnIndex(name).takeIf{it>=0 && !isNull(it)}?.let{getInt(it)}?:0
+
+===== app/src/main/java/com/acoder/gallery/data/preferences/PreferencesRepository.kt =====
+package com.acoder.gallery.data.preferences
+import android.content.Context
+import androidx.datastore.preferences.core.*
+import androidx.datastore.preferences.preferencesDataStore
+import com.acoder.gallery.domain.model.SortOrder
+import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.map
+import javax.inject.Inject
+import javax.inject.Singleton
+private val Context.store by preferencesDataStore("gallery_preferences")
+@Singleton class PreferencesRepository @Inject constructor(@ApplicationContext private val context: Context) {
+    private val sort=stringPreferencesKey("sort"); private val theme=stringPreferencesKey("theme"); private val grid=intPreferencesKey("grid"); private val autoplay=booleanPreferencesKey("autoplay")
+    val sortOrder:Flow<SortOrder> = context.store.data.map{runCatching{SortOrder.valueOf(it[sort]?:SortOrder.NEWEST.name)}.getOrDefault(SortOrder.NEWEST)}
+    val themeMode:Flow<String> = context.store.data.map{it[theme]?:"SYSTEM"}; val gridSize:Flow<Int> = context.store.data.map{it[grid]?:3}; val autoPlay:Flow<Boolean> = context.store.data.map{it[autoplay]?:true}
+    suspend fun setSort(v:SortOrder)=context.store.edit{it[sort]=v.name}; suspend fun setTheme(v:String)=context.store.edit{it[theme]=v}; suspend fun setGrid(v:Int)=context.store.edit{it[grid]=v}; suspend fun setAutoPlay(v:Boolean)=context.store.edit{it[autoplay]=v}
+}
+
+===== app/src/main/java/com/acoder/gallery/di/AppModule.kt =====
+package com.acoder.gallery.di
+import android.content.Context
+import com.acoder.gallery.data.mediastore.MediaStoreRepository
+import com.acoder.gallery.data.preferences.PreferencesRepository
+import com.acoder.gallery.domain.repository.MediaRepository
+import dagger.Module
+import dagger.Provides
+import dagger.hilt.InstallIn
+import dagger.hilt.android.components.SingletonComponent
+import dagger.hilt.android.qualifiers.ApplicationContext
+import javax.inject.Singleton
+@Module @InstallIn(SingletonComponent::class) object AppModule {
+ @Provides @Singleton fun media(@ApplicationContext c:Context):MediaRepository=MediaStoreRepository(c)
+ @Provides @Singleton fun prefs(@ApplicationContext c:Context)=PreferencesRepository(c)
+}
+
+===== app/src/main/java/com/acoder/gallery/domain/model/MediaItem.kt =====
+package com.acoder.gallery.domain.model
+
+import android.net.Uri
+
+enum class MediaType { IMAGE, VIDEO }
+
+data class MediaItem(
+    val id: Long, val uri: Uri, val name: String, val type: MediaType,
+    val dateTaken: Long, val dateAdded: Long, val dateModified: Long,
+    val size: Long, val width: Int, val height: Int, val duration: Long = 0L,
+    val bucketId: String? = null, val bucketName: String? = null, val relativePath: String? = null,
+    val mimeType: String? = null
+) {
+    val isVideo get() = type == MediaType.VIDEO
+    val displayDate get() = if (dateTaken > 0) dateTaken else dateModified
+}
+
+data class Album(val id: String, val name: String, val count: Int, val coverUri: Uri?, val relativePath: String?)
+
+enum class MediaFilter { ALL, PHOTOS, VIDEOS, LARGE, RECENT, FAVORITES }
+enum class SortOrder { NEWEST, OLDEST, NAME_ASC, NAME_DESC, SIZE_DESC, SIZE_ASC, PHOTOS_FIRST, VIDEOS_FIRST }
+
+===== app/src/main/java/com/acoder/gallery/domain/repository/MediaRepository.kt =====
+package com.acoder.gallery.domain.repository
+
+import androidx.paging.PagingSource
+import com.acoder.gallery.domain.model.Album
+import com.acoder.gallery.domain.model.MediaFilter
+import com.acoder.gallery.domain.model.MediaItem
+import com.acoder.gallery.domain.model.SortOrder
+
+interface MediaRepository {
+    fun pagingSource(sort: SortOrder, filter: MediaFilter, query: String, albumId: String? = null): PagingSource<String, MediaItem>
+    suspend fun queryMedia(sort: SortOrder = SortOrder.NEWEST, filter: MediaFilter = MediaFilter.ALL, query: String = "", albumId: String? = null): List<MediaItem>
+    suspend fun queryAlbums(): List<Album>
+    suspend fun delete(items: List<MediaItem>): Int
+}
+
+===== app/src/main/java/com/acoder/gallery/domain/usecase/CreateMediaPagerUseCase.kt =====
+package com.acoder.gallery.domain.usecase
+import androidx.paging.Pager
+import androidx.paging.PagingConfig
+import com.acoder.gallery.domain.model.*
+import com.acoder.gallery.domain.repository.MediaRepository
+import javax.inject.Inject
+class CreateMediaPagerUseCase @Inject constructor(private val repository:MediaRepository){operator fun invoke(sort:SortOrder,filter:MediaFilter,query:String,albumId:String?)=Pager(PagingConfig(pageSize=50,initialLoadSize=50,prefetchDistance=10,enablePlaceholders=false)){repository.pagingSource(sort,filter,query,albumId)}.flow}
+
+===== app/src/main/java/com/acoder/gallery/domain/usecase/DeleteMediaUseCase.kt =====
+package com.acoder.gallery.domain.usecase
+import com.acoder.gallery.domain.model.MediaItem
+import com.acoder.gallery.domain.repository.MediaRepository
+import javax.inject.Inject
+class DeleteMediaUseCase @Inject constructor(private val repository:MediaRepository){suspend operator fun invoke(items:List<MediaItem>)=repository.delete(items)}
+
+===== app/src/main/java/com/acoder/gallery/domain/usecase/GetAlbumsUseCase.kt =====
+package com.acoder.gallery.domain.usecase
+import com.acoder.gallery.domain.repository.MediaRepository
+import javax.inject.Inject
+class GetAlbumsUseCase @Inject constructor(private val repository:MediaRepository){suspend operator fun invoke()=repository.queryAlbums()}
+
+===== app/src/main/java/com/acoder/gallery/presentation/albums/AlbumsScreen.kt =====
+package com.acoder.gallery.presentation.albums
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.grid.*
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Collections
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.unit.dp
+import androidx.navigation.NavHostController
+import coil3.compose.AsyncImage
+import com.acoder.gallery.presentation.home.HomeViewModel
+import com.acoder.gallery.domain.model.Album
+@Composable fun AlbumsScreen(vm:HomeViewModel,nav:NavHostController){val albums by vm.albums.collectAsState();LaunchedEffect(Unit){vm.loadAlbums()};Column{TopAppBar({Text("Albums")});if(albums.isEmpty())Box(Modifier.fillMaxSize(),contentAlignment=androidx.compose.ui.Alignment.Center){Text("No albums found")}else LazyVerticalGrid(GridCells.Adaptive(160.dp),contentPadding=PaddingValues(10.dp)){items(albums,key={it.id}){AlbumCard(it){vm.setAlbum(it.id);nav.navigate("media")}}}}}
+@Composable private fun AlbumCard(a:Album,onClick:()->Unit){Card(Modifier.padding(6.dp).clickable(onClick=onClick)){Column{AsyncImage(model=a.coverUri,contentDescription=a.name,modifier=Modifier.fillMaxWidth().aspectRatio(1.25f),contentScale=ContentScale.Crop);Column(Modifier.padding(12.dp)){Text(a.name,style=MaterialTheme.typography.titleMedium);Text("${a.count} items",style=MaterialTheme.typography.bodySmall)}}}}
+
+===== app/src/main/java/com/acoder/gallery/presentation/common/PermissionScreen.kt =====
+package com.acoder.gallery.presentation.common
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
+import android.provider.Settings
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.layout.*
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.PhotoLibrary
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
+import com.acoder.gallery.core.permissions.PermissionManager
+@Composable fun PermissionScreen(context:Context,onGranted:()->Unit){val launcher=rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()){onGranted()};Column(Modifier.fillMaxSize().padding(32.dp),verticalArrangement=Arrangement.Center,horizontalAlignment=Alignment.CenterHorizontally){Icon(Icons.Default.PhotoLibrary,null,Modifier.size(72.dp));Spacer(Modifier.height(20.dp));Text("Welcome to Gallery",style=MaterialTheme.typography.headlineMedium);Spacer(Modifier.height(10.dp));Text("Manage, view, edit and organize your photos and videos locally on your device.");Spacer(Modifier.height(28.dp));Button(onClick={launcher.launch(PermissionManager.permissions())}){Text("Allow Photos & Videos")};TextButton(onClick={context.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${context.packageName}")) )}){Text("Open Settings")}}}
+
+===== app/src/main/java/com/acoder/gallery/presentation/editor/PhotoEditorScreen.kt =====
+package com.acoder.gallery.presentation.editor
+
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.Canvas
+import android.graphics.Paint
+import android.graphics.PorterDuff
+import android.graphics.PorterDuffXfermode
+import android.net.Uri
+import android.provider.MediaStore
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.layout.*
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.runtime.snapshots.SnapshotStateList
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.dp
+import androidx.navigation.NavHostController
+import com.acoder.gallery.core.editor.ImageEditor
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+
+@Composable fun PhotoEditorScreen(uri:Uri,nav:NavHostController){
+ val context=LocalContext.current; var original by remember{mutableStateOf<Bitmap?>(null)}
+ LaunchedEffect(uri){original=withContext(Dispatchers.IO){context.contentResolver.openInputStream(uri)?.use{BitmapFactory.decodeStream(it)}}}
+ var state by remember{mutableStateOf(ImageEditor.State())}; val history=remember{mutableStateListOf(state)};var historyIndex by remember{mutableIntStateOf(0)};var tool by remember{mutableStateOf("adjust")};var brush by remember{mutableFloatStateOf(40f)};val eraserStrokes=remember{mutableStateListOf<Offset>()}
+ BackHandler{nav.popBackStack()};val source=original;if(source==null){Box(Modifier.fillMaxSize(),contentAlignment=androidx.compose.ui.Alignment.Center){CircularProgressIndicator()};return}
+ val rendered=remember(source,state){ImageEditor(source).render(state)}
+ fun update(s:ImageEditor.State){state=s;while(history.size>historyIndex+1)history.removeAt(history.lastIndex);history.add(s);historyIndex=history.lastIndex}
+ Column(Modifier.fillMaxSize()){TopAppBar(title={Text("Photo Editor")},navigationIcon={IconButton({nav.popBackStack()}){Icon(Icons.Default.ArrowBack,null)}},actions={IconButton({if(historyIndex>0){historyIndex--;state=history[historyIndex]}}){Icon(Icons.Default.Undo,null)};IconButton({if(historyIndex<history.lastIndex){historyIndex++;state=history[historyIndex]}}){Icon(Icons.Default.Redo,null)};TextButton({val finalBmp=applyEraser(rendered,eraserStrokes,brush);saveBitmap(context,finalBmp);finalBmp.recycle();nav.popBackStack()}){Text("Save Copy")}})
+  Box(Modifier.fillMaxWidth().weight(1f)){androidx.compose.foundation.Image(rendered.asImageBitmap(),null,Modifier.fillMaxSize(),ContentScale.Fit);if(tool=="eraser")Canvas(Modifier.fillMaxSize().pointerInput(brush,rendered){detectDragGestures(onDragStart={p->eraserStrokes.add(Offset(p.x/size.width,p.y/size.height))},onDrag={c,_->eraserStrokes.add(Offset(c.position.x/size.width,c.position.y/size.height))})}){}}
+  when(tool){"adjust"->{Adjustment("Brightness",state.brightness,-1f,1f){update(state.copy(brightness=it))};Adjustment("Contrast",state.contrast,.2f,2f){update(state.copy(contrast=it))};Adjustment("Saturation",state.saturation,0f,2f){update(state.copy(saturation=it))};Adjustment("Exposure",state.exposure,-1f,1f){update(state.copy(exposure=it))};Adjustment("Temperature",state.temperature,-1f,1f){update(state.copy(temperature=it))};Adjustment("Shadows",state.shadows,-1f,1f){update(state.copy(shadows=it))};Adjustment("Highlights",state.highlights,-1f,1f){update(state.copy(highlights=it))};Adjustment("Black Point",state.blackPoint,-1f,1f){update(state.copy(blackPoint=it))};Adjustment("Sharpness",state.sharpness,0f,1f){update(state.copy(sharpness=it))};Adjustment("Definition",state.definition,0f,1f){update(state.copy(definition=it))}}
+   "crop"->Row(Modifier.fillMaxWidth().padding(8.dp),horizontalArrangement=Arrangement.SpaceEvenly){listOf("Original","1:1","4:3","3:4","16:9","9:16").forEach{label->TextButton({if(label=="Original")update(state.copy(crop=null))else{val w=rendered.width.toFloat();val h=rendered.height.toFloat();val r=when(label){"1:1"->1f;"4:3"->4f/3f;"3:4"->3f/4f;"16:9"->16f/9f;else->9f/16f};val cw=minOf(w,h*r);val ch=cw/r;update(state.copy(crop=android.graphics.RectF((w-cw)/2,(h-ch)/2,(w+cw)/2,(h+ch)/2)))}}){Text(label)}}}
+   "eraser"->Adjustment("Brush Size",brush,10f,180f){brush=it}
+  }
+  Row(Modifier.fillMaxWidth().padding(8.dp),horizontalArrangement=Arrangement.SpaceEvenly){Tool("Adjust",tool=="adjust"){tool="adjust"};Tool("Crop",tool=="crop"){tool="crop"};Tool("Rotate",false){update(state.copy(rotation=(state.rotation+90)%360))};Tool("Flip",false){update(state.copy(flipX=!state.flipX))};Tool("Eraser",tool=="eraser"){tool="eraser"}}
+ }
+}
+@Composable private fun Adjustment(name:String,value:Float,min:Float,max:Float,on:(Float)->Unit){Column(Modifier.padding(horizontal=14.dp)){Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.SpaceBetween){Text(name);Text("%.2f".format(value))};Slider(value,on,minValue=min,maxValue=max)}}
+@Composable private fun Tool(label:String,selected:Boolean,on:()->Unit){FilterChip(selected=selected,onClick=on,label={Text(label)})}
+private fun applyEraser(src:Bitmap,strokes:SnapshotStateList<Offset>,brush:Float):Bitmap{val out=src.copy(Bitmap.Config.ARGB_8888,true);if(strokes.isEmpty())return out;val c=Canvas(out);val p=Paint(Paint.ANTI_ALIAS_FLAG).apply{color=android.graphics.Color.TRANSPARENT;xfermode=PorterDuffXfermode(PorterDuff.Mode.CLEAR)};strokes.forEach{s->c.drawCircle(s.x*out.width,s.y*out.height,brush/2f,p)};return out}
+private fun saveBitmap(context:android.content.Context,bmp:Bitmap){val values=android.content.ContentValues().apply{put(MediaStore.Images.Media.DISPLAY_NAME,"Edited_${System.currentTimeMillis()}.png");put(MediaStore.Images.Media.MIME_TYPE,"image/png");if(android.os.Build.VERSION.SDK_INT>=29){put(MediaStore.Images.Media.RELATIVE_PATH,"Pictures/Gallery");put(MediaStore.Images.Media.IS_PENDING,1)}};val uri=context.contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI,values)?:return;context.contentResolver.openOutputStream(uri)?.use{bmp.compress(Bitmap.CompressFormat.PNG,100,it)};if(android.os.Build.VERSION.SDK_INT>=29)context.contentResolver.update(uri,android.content.ContentValues().apply{put(MediaStore.Images.Media.IS_PENDING,0)},null,null)}
+
+===== app/src/main/java/com/acoder/gallery/presentation/home/GalleryApp.kt =====
+package com.acoder.gallery.presentation.home
+
+import android.content.Context
+import android.os.Build
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.layout.*
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.dp
+import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.navigation.compose.*
+import com.acoder.gallery.core.permissions.PermissionManager
+import com.acoder.gallery.presentation.albums.AlbumsScreen
+import com.acoder.gallery.presentation.common.PermissionScreen
+import com.acoder.gallery.presentation.media.MediaScreen
+import com.acoder.gallery.presentation.settings.SettingsScreen
+import com.acoder.gallery.presentation.viewer.MediaViewerScreen
+import com.acoder.gallery.presentation.video.VideoPlayerScreen
+import com.acoder.gallery.presentation.editor.PhotoEditorScreen
+import android.net.Uri
+
+@Composable fun GalleryApp(vm:HomeViewModel=hiltViewModel()){
+ val context=LocalContext.current; var access by remember{mutableStateOf(PermissionManager.hasAnyAccess(context))}; val lifecycle=androidx.lifecycle.compose.LocalLifecycleOwner.current
+ DisposableEffect(lifecycle){val o=androidx.lifecycle.LifecycleEventObserver{_,e->if(e==androidx.lifecycle.Lifecycle.Event.ON_RESUME)access=PermissionManager.hasAnyAccess(context)};lifecycle.lifecycle.addObserver(o);onDispose{lifecycle.lifecycle.removeObserver(o)}}
+ GalleryTheme(vm.theme.collectAsState().value){if(!access){PermissionScreen(context){access=PermissionManager.hasAnyAccess(context)};return@GalleryTheme}
+  val nav=rememberNavController(); val entry by nav.currentBackStackEntryAsState(); val route=entry?.destination?.route
+  Scaffold(bottomBar={if(route in listOf("media","albums","settings"))NavigationBar{NavigationBarItem(selected=route=="media",onClick={nav.navigate("media"){popUpTo("media"){inclusive=false};launchSingleTop=true}},icon={Icon(Icons.Default.PhotoLibrary,null)},label={Text("Photos")});NavigationBarItem(selected=route=="albums",onClick={nav.navigate("albums"){launchSingleTop=true}},icon={Icon(Icons.Default.Collections,null)},label={Text("Albums")});NavigationBarItem(selected=route=="settings",onClick={nav.navigate("settings"){launchSingleTop=true}},icon={Icon(Icons.Default.Settings,null)},label={Text("Settings")})}}){p->NavHost(nav,"media",Modifier.padding(p)){composable("media"){MediaScreen(vm,nav)};composable("albums"){AlbumsScreen(vm,nav)};composable("settings"){SettingsScreen(vm)};composable("viewer"){MediaViewerScreen(vm,nav)};composable("video"){VideoPlayerScreen(vm,nav)};composable("editor/{uri}"){b->PhotoEditorScreen(Uri.parse(b.arguments?.getString("uri")),nav)}}}
+ }
+}
+
+===== app/src/main/java/com/acoder/gallery/presentation/home/HomeViewModel.kt =====
+package com.acoder.gallery.presentation.home
+
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
+import androidx.paging.cachedIn
+import com.acoder.gallery.data.preferences.PreferencesRepository
+import com.acoder.gallery.domain.model.Album
+import com.acoder.gallery.domain.model.MediaFilter
+import com.acoder.gallery.domain.model.MediaItem
+import com.acoder.gallery.domain.model.SortOrder
+import com.acoder.gallery.domain.usecase.CreateMediaPagerUseCase
+import com.acoder.gallery.domain.usecase.DeleteMediaUseCase
+import com.acoder.gallery.domain.usecase.GetAlbumsUseCase
+import dagger.hilt.android.lifecycle.HiltViewModel
+import javax.inject.Inject
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
+
+@HiltViewModel
+class HomeViewModel @Inject constructor(
+    private val createPager: CreateMediaPagerUseCase,
+    private val deleteMedia: DeleteMediaUseCase,
+    private val getAlbums: GetAlbumsUseCase,
+    private val prefs: PreferencesRepository
+) : ViewModel() {
+
+    val sort: StateFlow<SortOrder> = prefs.sortOrder.stateIn(
+        viewModelScope,
+        SharingStarted.WhileSubscribed(5_000),
+        SortOrder.NEWEST
+    )
+
+    val theme: StateFlow<String> = prefs.themeMode.stateIn(
+        viewModelScope,
+        SharingStarted.WhileSubscribed(5_000),
+        "SYSTEM"
+    )
+
+    val grid: StateFlow<Int> = prefs.gridSize.stateIn(
+        viewModelScope,
+        SharingStarted.WhileSubscribed(5_000),
+        3
+    )
+
+    val autoPlay: StateFlow<Boolean> = prefs.autoPlay.stateIn(
+        viewModelScope,
+        SharingStarted.WhileSubscribed(5_000),
+        true
+    )
+
+    val query = MutableStateFlow("")
+    val viewerItems = MutableStateFlow<List<MediaItem>>(emptyList())
+    val viewerIndex = MutableStateFlow(0)
+    val filter = MutableStateFlow(MediaFilter.ALL)
+    val album = MutableStateFlow<String?>(null)
+    val selected = MutableStateFlow<Set<Long>>(emptySet())
+    val albums = MutableStateFlow<List<Album>>(emptyList())
+    val busy = MutableStateFlow(false)
+    val message = MutableSharedFlow<String>(extraBufferCapacity = 8)
+
+    val paging = combine(sort, filter, query, album) { currentSort, currentFilter, currentQuery, currentAlbum ->
+        createPager(currentSort, currentFilter, currentQuery, currentAlbum)
+    }.flatMapLatest { it }.cachedIn(viewModelScope)
+
+    fun setSort(value: SortOrder) {
+        viewModelScope.launch { prefs.setSort(value) }
+    }
+
+    fun setGrid(value: Int) {
+        viewModelScope.launch { prefs.setGrid(value) }
+    }
+
+    fun setTheme(value: String) {
+        viewModelScope.launch { prefs.setTheme(value) }
+    }
+
+    fun setAutoPlay(value: Boolean) {
+        viewModelScope.launch { prefs.setAutoPlay(value) }
+    }
+
+    fun setQuery(value: String) {
+        query.value = value
+    }
+
+    fun openViewer(items: List<MediaItem>, index: Int) {
+        viewerItems.value = items
+        viewerIndex.value = index
+    }
+
+    fun setFilter(value: MediaFilter) {
+        filter.value = value
+    }
+
+    fun setAlbum(value: String?) {
+        album.value = value
+    }
+
+    fun toggle(id: Long) {
+        selected.update { current ->
+            if (id in current) current - id else current + id
+        }
+    }
+
+    fun clearSelection() {
+        selected.value = emptySet()
+    }
+
+    fun selectAll(ids: List<Long>) {
+        selected.value = ids.toSet()
+    }
+
+    fun loadAlbums() {
+        viewModelScope.launch {
+            albums.value = getAlbums()
+        }
+    }
+
+    fun delete(items: List<MediaItem>) {
+        viewModelScope.launch {
+            busy.value = true
+            val count = deleteMedia(items)
+            busy.value = false
+            selected.value = emptySet()
+            message.emit("$count item${if (count == 1) "" else "s"} deleted")
+        }
+    }
+
+    fun savePrefsDone() {
+        viewModelScope.launch {
+            message.emit("Settings saved")
+        }
+    }
+}
+
+===== app/src/main/java/com/acoder/gallery/presentation/home/Theme.kt =====
+package com.acoder.gallery.presentation.home
+
+import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.darkColorScheme
+import androidx.compose.material3.lightColorScheme
+import androidx.compose.runtime.Composable
+
+@Composable
+fun GalleryTheme(
+    mode: String,
+    content: @Composable () -> Unit
+) {
+    val dark = when (mode) {
+        "DARK" -> true
+        "LIGHT" -> false
+        else -> isSystemInDarkTheme()
+    }
+
+    MaterialTheme(
+        colorScheme = if (dark) darkColorScheme() else lightColorScheme(),
+        content = content
+    )
+}
+
+===== app/src/main/java/com/acoder/gallery/presentation/media/MediaScreen.kt =====
+package com.acoder.gallery.presentation.media
+
+import android.app.Activity
+import android.content.Intent
+import android.net.Uri
+import android.os.Build
+import android.provider.MediaStore
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.IntentSenderRequest
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.grid.*
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.dp
+import androidx.navigation.NavHostController
+import androidx.paging.compose.collectAsLazyPagingItems
+import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.WorkManager
+import androidx.work.workDataOf
+import coil3.compose.AsyncImage
+import com.acoder.gallery.core.collage.CollageGenerator
+import com.acoder.gallery.core.media.MediaOperationWorker
+import com.acoder.gallery.core.pdf.PdfGenerator
+import com.acoder.gallery.core.sharing.ExportManager
+import com.acoder.gallery.core.sharing.MediaShareManager
+import com.acoder.gallery.core.util.dateLabel
+import com.acoder.gallery.domain.model.*
+import com.acoder.gallery.presentation.home.HomeViewModel
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+fun MediaScreen(vm: HomeViewModel, nav: NavHostController) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val items = vm.paging.collectAsLazyPagingItems()
+    val selected by vm.selected.collectAsState()
+    val query by vm.query.collectAsState()
+    val grid by vm.grid.collectAsState()
+    var sortOpen by remember { mutableStateOf(false) }
+    var filterOpen by remember { mutableStateOf(false) }
+    var action by remember { mutableStateOf<String?>(null) }
+    var moveMode by remember { mutableStateOf("copy") }
+    var pendingDelete by remember { mutableStateOf<List<MediaItem>>(emptyList()) }
+
+    fun performDelete(list: List<MediaItem>) {
+        vm.delete(list)
+        items.refresh()
+    }
+
+    val deleteLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartIntentSenderForResult()
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK) performDelete(pendingDelete)
+    }
+
+    val selectedLoaded = items.itemSnapshotList.items.filter { it.id in selected }
+    val treeLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { tree ->
+        if (tree != null && selectedLoaded.isNotEmpty()) {
+            try {
+                context.contentResolver.takePersistableUriPermission(
+                    tree,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                )
+            } catch (_: Exception) { }
+            val data = workDataOf(
+                "mode" to moveMode,
+                "dest" to tree.toString(),
+                "uris" to selectedLoaded.map { it.uri.toString() }.toTypedArray()
+            )
+            WorkManager.getInstance(context)
+                .enqueue(OneTimeWorkRequestBuilder<MediaOperationWorker>().setInputData(data).build())
+            vm.clearSelection()
+        }
+    }
+
+    LaunchedEffect(Unit) { vm.loadAlbums() }
+
+    Column(Modifier.fillMaxSize()) {
+        TopAppBar(
+            title = { Text(if (selected.isEmpty()) "Gallery" else "${selected.size} Selected") },
+            actions = {
+                if (selected.isEmpty()) {
+                    IconButton({ filterOpen = true }) { Icon(Icons.Default.FilterList, "Filter") }
+                    IconButton({ sortOpen = true }) { Icon(Icons.Default.Sort, "Sort") }
+                    IconButton({ nav.navigate("settings") }) { Icon(Icons.Default.Settings, "Settings") }
+                } else {
+                    IconButton({ vm.selectAll(items.itemSnapshotList.items.map { it.id }) }) {
+                        Icon(Icons.Default.SelectAll, "Select all loaded")
+                    }
+                    IconButton({ vm.clearSelection() }) { Icon(Icons.Default.Close, "Clear") }
+                }
+            }
+        )
+
+        OutlinedTextField(
+            value = query,
+            onValueChange = vm::setQuery,
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
+            singleLine = true,
+            placeholder = { Text("Search photos and videos...") },
+            leadingIcon = { Icon(Icons.Default.Search, null) },
+            trailingIcon = if (query.isNotEmpty()) {
+                { IconButton({ vm.setQuery("") }) { Icon(Icons.Default.Clear, "Clear") } }
+            } else null
+        )
+
+        if (selected.isNotEmpty()) {
+            Row(
+                Modifier.fillMaxWidth().padding(8.dp),
+                horizontalArrangement = Arrangement.SpaceEvenly
+            ) {
+                ActionIcon("Delete", Icons.Default.Delete) { action = "delete" }
+                ActionIcon("Share", Icons.Default.Share) {
+                    MediaShareManager.share(
+                        context,
+                        selectedLoaded.map { it.uri },
+                        selectedLoaded.firstOrNull()?.mimeType ?: "*/*"
+                    )
+                }
+                ActionIcon("PDF", Icons.Default.PictureAsPdf) { action = "pdf" }
+                ActionIcon("Collage", Icons.Default.GridView) { action = "collage" }
+                ActionIcon("More", Icons.Default.MoreVert) { action = "more" }
+                ActionIcon("Clear", Icons.Default.Clear) { vm.clearSelection() }
+            }
+        }
+
+        LazyVerticalGrid(
+            columns = GridCells.Fixed(grid.coerceIn(2, 5)),
+            contentPadding = PaddingValues(2.dp),
+            modifier = Modifier.fillMaxSize()
+        ) {
+            for (index in 0 until items.itemCount) {
+                val item = items.peek(index) ?: continue
+                val previous = if (index > 0) items.peek(index - 1) else null
+                if (previous == null || previous.displayDate.dateLabel() != item.displayDate.dateLabel()) {
+                    item(
+                        key = "date-${item.id}",
+                        span = { GridItemSpan(maxLineSpan) }
+                    ) {
+                        Text(
+                            item.displayDate.dateLabel(),
+                            style = MaterialTheme.typography.titleSmall,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp)
+                        )
+                    }
+                }
+                item(key = item.id, contentType = item.type) {
+                    MediaTile(
+                        item = item,
+                        selected = item.id in selected,
+                        onTap = { vm.toggle(item.id) },
+                        onLong = {
+                            if (selected.isEmpty()) {
+                                vm.openViewer(items.itemSnapshotList.items, index)
+                                nav.navigate(if (item.isVideo) "video" else "viewer")
+                            } else {
+                                vm.toggle(item.id)
+                            }
+                        }
+                    )
+                }
+            }
+        }
+    }
+
+    DropdownMenu(expanded = sortOpen, onDismissRequest = { sortOpen = false }) {
+        SortOrder.values().forEach { sort ->
+            DropdownMenuItem(
+                text = { Text(sortLabel(sort)) },
+                onClick = { vm.setSort(sort); sortOpen = false }
+            )
+        }
+    }
+    DropdownMenu(expanded = filterOpen, onDismissRequest = { filterOpen = false }) {
+        MediaFilter.values().forEach { filter ->
+            DropdownMenuItem(
+                text = { Text(filter.name.replace('_', ' ').lowercase().replaceFirstChar { it.uppercase() }) },
+                onClick = { vm.setFilter(filter); filterOpen = false }
+            )
+        }
+    }
+
+    if (action != null) {
+        val chosen = items.itemSnapshotList.items.filter { it.id in selected }
+        when (action) {
+            "delete" -> ConfirmDialog(
+                "Delete ${chosen.size} items?",
+                "Android will ask for confirmation when required. Items are moved to system trash when supported."
+            ) {
+                if (Build.VERSION.SDK_INT >= 30) {
+                    pendingDelete = chosen
+                    deleteLauncher.launch(
+                        IntentSenderRequest.Builder(
+                            MediaStore.createDeleteRequest(context.contentResolver, chosen.map { it.uri }).intentSender
+                        ).build()
+                    )
+                } else {
+                    performDelete(chosen)
+                }
+                action = null
+            }
+            "pdf" -> ConfirmDialog("Create PDF?", "${chosen.size} selected images will be exported.") {
+                if (chosen.isNotEmpty() && chosen.all { !it.isVideo }) {
+                    scope.launch(Dispatchers.IO) {
+                        val file = PdfGenerator.generate(context, chosen.map { it.uri })
+                        val saved = ExportManager.saveToDownloads(context, file, "application/pdf", "Gallery_${System.currentTimeMillis()}.pdf")
+                        withContext(Dispatchers.Main) {
+                            saved?.let { MediaShareManager.share(context, listOf(it), "application/pdf") }
+                        }
+                    }
+                }
+                vm.clearSelection(); action = null
+            }
+            "collage" -> ConfirmDialog("Create collage?", "Use the selected images to create a collage.") {
+                if (chosen.isNotEmpty() && chosen.all { !it.isVideo }) {
+                    scope.launch(Dispatchers.IO) {
+                        val file = CollageGenerator.generate(context, chosen.map { it.uri })
+                        val saved = ExportManager.saveToDownloads(context, file, "image/jpeg", "Collage_${System.currentTimeMillis()}.jpg")
+                        withContext(Dispatchers.Main) {
+                            saved?.let { MediaShareManager.share(context, listOf(it), "image/jpeg") }
+                        }
+                    }
+                }
+                vm.clearSelection(); action = null
+            }
+            "more" -> AlertDialog(
+                onDismissRequest = { action = null },
+                title = { Text("Manage selected") },
+                text = {
+                    Column {
+                        TextButton({ moveMode = "copy"; action = null; treeLauncher.launch(null) }) { Text("Copy to folder") }
+                        TextButton({ moveMode = "move"; action = null; treeLauncher.launch(null) }) { Text("Move to folder") }
+                    }
+                },
+                confirmButton = { TextButton({ action = null }) { Text("Close") } }
+            )
+        }
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun MediaTile(item: MediaItem, selected: Boolean, onTap: () -> Unit, onLong: () -> Unit) {
+    Box(
+        Modifier.padding(2.dp).aspectRatio(1f).combinedClickable(onClick = onTap, onLongClick = onLong)
+    ) {
+        AsyncImage(
+            model = item.uri,
+            contentDescription = item.name,
+            contentScale = ContentScale.Crop,
+            modifier = Modifier.fillMaxSize()
+        )
+        if (item.isVideo) Icon(Icons.Default.PlayCircle, null, Modifier.padding(7.dp).size(30.dp))
+        if (selected) {
+            Surface(
+                Modifier.padding(6.dp),
+                shape = MaterialTheme.shapes.small,
+                color = MaterialTheme.colorScheme.primary
+            ) { Icon(Icons.Default.Check, null, Modifier.padding(3.dp).size(18.dp), tint = MaterialTheme.colorScheme.onPrimary) }
+        }
+    }
+}
+
+@Composable
+private fun ActionIcon(label: String, icon: androidx.compose.ui.graphics.vector.ImageVector, onClick: () -> Unit) {
+    Column(horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally) {
+        IconButton(onClick) { Icon(icon, label) }
+        Text(label, style = MaterialTheme.typography.labelSmall)
+    }
+}
+
+@Composable
+private fun ConfirmDialog(title: String, text: String, onConfirm: () -> Unit) {
+    var open by remember { mutableStateOf(true) }
+    if (open) AlertDialog(
+        onDismissRequest = { open = false },
+        title = { Text(title) }, text = { Text(text) },
+        confirmButton = { TextButton({ open = false; onConfirm() }) { Text("Confirm") } },
+        dismissButton = { TextButton({ open = false }) { Text("Cancel") } }
+    )
+}
+
+private fun sortLabel(s: SortOrder) = when (s) {
+    SortOrder.NEWEST -> "Date — Newest First"
+    SortOrder.OLDEST -> "Date — Oldest First"
+    SortOrder.NAME_ASC -> "Name — A to Z"
+    SortOrder.NAME_DESC -> "Name — Z to A"
+    SortOrder.SIZE_DESC -> "Size — Largest First"
+    SortOrder.SIZE_ASC -> "Size — Smallest First"
+    SortOrder.PHOTOS_FIRST -> "Photos First"
+    SortOrder.VIDEOS_FIRST -> "Videos First"
+}
+
+===== app/src/main/java/com/acoder/gallery/presentation/settings/SettingsScreen.kt =====
+package com.acoder.gallery.presentation.settings
+import androidx.compose.foundation.layout.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
+import com.acoder.gallery.domain.model.SortOrder
+import com.acoder.gallery.presentation.home.HomeViewModel
+@Composable fun SettingsScreen(vm:HomeViewModel){val theme by vm.theme.collectAsState();val grid by vm.grid.collectAsState();val autoplay by vm.autoPlay.collectAsState();Column(Modifier.fillMaxSize()){TopAppBar({Text("Settings")});Text("Appearance",style=MaterialTheme.typography.titleLarge,modifier=Modifier.padding(16.dp));ThemeChoice(theme,vm);HorizontalDivider();Text("Gallery",style=MaterialTheme.typography.titleLarge,modifier=Modifier.padding(16.dp));Text("Grid size: $grid columns",modifier=Modifier.padding(horizontal=16.dp));Slider(grid.toFloat(),{vm.setGrid(it.toInt().coerceIn(2,5))},valueRange=2f..5f,steps=2,modifier=Modifier.padding(horizontal=16.dp));Row(Modifier.fillMaxWidth().padding(16.dp),horizontalArrangement=Arrangement.SpaceBetween){Text("Auto play videos");Switch(autoplay,{vm.setAutoPlay(it)})};Text("Sort order",style=MaterialTheme.typography.titleLarge,modifier=Modifier.padding(16.dp));SortOrder.values().forEach{s->TextButton({vm.setSort(s)},Modifier.fillMaxWidth()){Text(if(vm.sort.value==s)"✓ ${s.name}" else s.name)}};Spacer(Modifier.height(12.dp));Text("Privacy",style=MaterialTheme.typography.titleLarge,modifier=Modifier.padding(16.dp));Text("Media is processed locally. The app does not upload your photos or videos.",modifier=Modifier.padding(horizontal=16.dp))}}
+@Composable private fun ThemeChoice(theme:String,vm:HomeViewModel){Row(Modifier.fillMaxWidth().padding(16.dp),horizontalArrangement=Arrangement.SpaceEvenly){listOf("SYSTEM","LIGHT","DARK").forEach{FilterChip(theme==it,{vm.setTheme(it)},label={Text(it.lowercase().replaceFirstChar{c->c.uppercase()})})}}}
+
+===== app/src/main/java/com/acoder/gallery/presentation/video/VideoPlayerScreen.kt =====
+package com.acoder.gallery.presentation.video
+import android.net.Uri
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.layout.*
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.dp
+import androidx.media3.common.MediaItem as ExoItem
+import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.ui.PlayerView
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.navigation.NavHostController
+import com.acoder.gallery.presentation.home.HomeViewModel
+@Composable fun VideoPlayerScreen(vm:HomeViewModel,nav:NavHostController){val items by vm.viewerItems.collectAsState();val index by vm.viewerIndex.collectAsState();val context=LocalContext.current;if(items.isEmpty()){nav.popBackStack();return};val current=items.getOrNull(index)?:items.first();val player=remember(current.uri){ExoPlayer.Builder(context).build().apply{setMediaItem(ExoItem.fromUri(current.uri));prepare();playWhenReady=vm.autoPlay.value}};DisposableEffect(player){onDispose{player.release()}};BackHandler{nav.popBackStack()};var brightness by remember{mutableFloatStateOf(.5f)};var volume by remember{mutableFloatStateOf(1f)};Column(Modifier.fillMaxSize()){AndroidView({PlayerView(it).apply{this.player=player;useController=true}},Modifier.fillMaxWidth().weight(1f));Row(Modifier.fillMaxWidth().padding(10.dp),horizontalArrangement=Arrangement.SpaceEvenly){IconButton({player.seekTo((player.currentPosition-15000).coerceAtLeast(0))}){Icon(Icons.Default.Replay10,null)};IconButton({if(player.isPlaying)player.pause()else player.play()}){Icon(if(player.isPlaying)Icons.Default.Pause else Icons.Default.PlayArrow,null)};IconButton({player.seekTo((player.currentPosition+15000).coerceAtMost(player.duration.takeIf{it>0}?:Long.MAX_VALUE))}){Icon(Icons.Default.Forward10,null)};IconButton({if(index>0){index--;vm.viewerIndex.value=index}}){Icon(Icons.Default.SkipPrevious,null)};IconButton({if(index<items.lastIndex){index++;vm.viewerIndex.value=index}}){Icon(Icons.Default.SkipNext,null)}};Text("Brightness",Modifier.padding(horizontal=16.dp));Slider(brightness,{brightness=it;(context as? android.app.Activity)?.window?.attributes=(context as? android.app.Activity)?.window?.attributes?.apply{screenBrightness=brightness.coerceIn(.01f,1f)}},Modifier.padding(horizontal=16.dp));Text("Volume",Modifier.padding(horizontal=16.dp));Slider(volume,{volume=it;player.volume=it},Modifier.padding(horizontal=16.dp))}}
+
+===== app/src/main/java/com/acoder/gallery/presentation/viewer/MediaViewerScreen.kt =====
+package com.acoder.gallery.presentation.viewer
+
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.dp
+import androidx.navigation.NavHostController
+import coil3.compose.AsyncImage
+import com.acoder.gallery.core.sharing.MediaShareManager
+import com.acoder.gallery.core.util.dateTimeLabel
+import com.acoder.gallery.core.util.formatBytes
+import com.acoder.gallery.presentation.home.HomeViewModel
+
+@Composable
+fun MediaViewerScreen(vm: HomeViewModel, nav: NavHostController) {
+    val context = LocalContext.current
+    val items by vm.viewerItems.collectAsState()
+    val start by vm.viewerIndex.collectAsState()
+    BackHandler { nav.popBackStack() }
+    if (items.isEmpty()) { LaunchedEffect(Unit) { nav.popBackStack() }; return }
+
+    val pager = rememberPagerState(initialPage = start, pageCount = { items.size })
+    Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.scrim)) {
+        HorizontalPager(pager, Modifier.fillMaxSize()) { page ->
+            var scale by remember { mutableFloatStateOf(1f) }
+            var offsetX by remember { mutableFloatStateOf(0f) }
+            var offsetY by remember { mutableFloatStateOf(0f) }
+            AsyncImage(
+                model = items[page].uri,
+                contentDescription = items[page].name,
+                contentScale = ContentScale.Fit,
+                modifier = Modifier.fillMaxSize().graphicsLayer {
+                    scaleX = scale; scaleY = scale; translationX = offsetX; translationY = offsetY
+                }.pointerInput(Unit) {
+                    detectTransformGestures { _, pan, zoom, _ ->
+                        scale = (scale * zoom).coerceIn(1f, 5f)
+                        offsetX += pan.x; offsetY += pan.y
+                    }
+                }
+            )
+        }
+        IconButton({ nav.popBackStack() }, Modifier.padding(top = 24.dp, start = 8.dp)) {
+            Icon(Icons.Default.Close, "Close", tint = MaterialTheme.colorScheme.onSurface)
+        }
+        Text(
+            "${pager.currentPage + 1} / ${items.size}",
+            Modifier.align(Alignment.TopCenter).padding(top = 28.dp),
+            color = MaterialTheme.colorScheme.onSurface
+        )
+        Column(
+            Modifier.align(Alignment.BottomCenter).padding(20.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text(items[pager.currentPage].name, color = MaterialTheme.colorScheme.onSurface)
+            Text(
+                "${items[pager.currentPage].displayDate.dateTimeLabel()} • ${items[pager.currentPage].size.formatBytes()}",
+                color = MaterialTheme.colorScheme.onSurface,
+                style = MaterialTheme.typography.bodySmall
+            )
+            Row {
+                val current = items[pager.currentPage]
+                FilledTonalButton({ nav.navigate("editor/${android.net.Uri.encode(current.uri.toString())}") }) {
+                    Icon(Icons.Default.Edit, null); Spacer(Modifier.width(6.dp)); Text("Edit")
+                }
+                Spacer(Modifier.width(8.dp))
+                FilledTonalButton({ MediaShareManager.share(context, listOf(current.uri), current.mimeType ?: "*/*") }) {
+                    Icon(Icons.Default.Share, null); Spacer(Modifier.width(6.dp)); Text("Share")
+                }
+            }
+        }
+    }
+}
