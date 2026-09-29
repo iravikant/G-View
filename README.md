@@ -18,7 +18,6 @@ Production-oriented Android Gallery application using Kotlin, Jetpack Compose an
 - AndroidX Hilt Navigation Compose: 1.2.0
 - Dagger Hilt: 2.57.2
 - Hilt annotation processing: KAPT
-- Paging: 3.5.1
 - WorkManager: 2.10.5
 - DataStore: 1.1.7
 - Media3: 1.10.1
@@ -30,10 +29,12 @@ This project intentionally stays on the API-36 dependency line. Do not upgrade t
 
 Use JDK 17. Kotlin 2.2.10 is officially compatible with Gradle through 8.14; for AGP 8.12.x, use the Gradle version supported by that AGP release rather than Gradle 9.x.
 
-## Recent fixes
 
-- Fixed malformed Kotlin generic return syntax in `MediaStorePagingSource`.
-- Fixed the Compose function-type syntax in `Theme.kt`.
-- Reworked `HomeViewModel` into valid, readable Kotlin syntax.
-- Hilt uses KAPT consistently for the current build stack.
-- Kotlin JVM target uses the modern `compilerOptions` DSL.
+## Rotation and list loading
+
+- The activity no longer forces `fullSensor`; screen rotation follows the system auto-rotate setting.
+- The media library is loaded on `Dispatchers.IO`, cached in `HomeViewModel`, and refreshed by a MediaStore `ContentObserver`. Filtering, sorting and date grouping run on `Dispatchers.Default` and the grid only renders the prepared rows. Albums are derived from the same cache.
+
+## Building
+
+`./gradlew assembleDebug` -> `app/build/outputs/apk/debug/app-debug.apk`. A GitHub Actions workflow (`.github/workflows/build.yml`) builds the same APK on every push.

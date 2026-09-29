@@ -3,28 +3,38 @@ package com.acoder.gallery.presentation.home
 import android.content.IntentSender
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import androidx.paging.cachedIn
 import com.acoder.gallery.data.preferences.PreferencesRepository
 import com.acoder.gallery.domain.model.Album
 import com.acoder.gallery.domain.model.MediaFilter
 import com.acoder.gallery.domain.model.MediaItem
 import com.acoder.gallery.domain.model.SortOrder
 import com.acoder.gallery.domain.repository.MediaOpResult
-import com.acoder.gallery.domain.usecase.CreateMediaPagerUseCase
 import com.acoder.gallery.domain.usecase.DeleteMediaUseCase
-import com.acoder.gallery.domain.usecase.GetAlbumsUseCase
+import com.acoder.gallery.domain.usecase.MediaListBuilder
+import com.acoder.gallery.domain.usecase.MediaUiState
+import com.acoder.gallery.domain.usecase.ObserveMediaUseCase
 import com.acoder.gallery.domain.usecase.ToggleFavoriteUseCase
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /** One-shot events the UI must react to imperatively (system dialogs, snackbars). */
 sealed class HomeEvent {
@@ -33,12 +43,12 @@ sealed class HomeEvent {
     data class Message(val text: String) : HomeEvent()
 }
 
+@OptIn(FlowPreview::class, ExperimentalCoroutinesApi::class)
 @HiltViewModel
 class HomeViewModel @Inject constructor(
-    private val createPager: CreateMediaPagerUseCase,
+    observeMedia: ObserveMediaUseCase,
     private val deleteMedia: DeleteMediaUseCase,
     private val toggleFavoriteUseCase: ToggleFavoriteUseCase,
-    private val getAlbums: GetAlbumsUseCase,
     private val prefs: PreferencesRepository
 ) : ViewModel() {
 
@@ -57,15 +67,62 @@ class HomeViewModel @Inject constructor(
 
     /** Selection keyed by [MediaItem.key], not the raw MediaStore id — image and video ids can collide. */
     val selected = MutableStateFlow<Set<String>>(emptySet())
-    val albums = MutableStateFlow<List<Album>>(emptyList())
-    val albumsLoading = MutableStateFlow(false)
     val busy = MutableStateFlow(false)
 
     val events = MutableSharedFlow<HomeEvent>(extraBufferCapacity = 8)
 
-    val paging = combine(sort, filter, query, album) { currentSort, currentFilter, currentQuery, currentAlbum ->
-        createPager(currentSort, currentFilter, currentQuery, currentAlbum)
-    }.flatMapLatest { it }.cachedIn(viewModelScope)
+    // ---- Media list: loaded in the background, cached here, kept fresh by a MediaStore observer ----
+
+    private val accessGranted = MutableStateFlow(false)
+    private val refreshTick = MutableStateFlow(0)
+
+    /** Full unfiltered library. `null` until the first load finishes; keeps its last value while reloading. */
+    private val allMedia: StateFlow<List<MediaItem>?> =
+        combine(accessGranted, refreshTick) { granted, _ -> granted }
+            .flatMapLatest { granted -> if (granted) observeMedia() else emptyFlow() }
+            .stateIn(viewModelScope, SharingStarted.Eagerly, null)
+
+    /** Rows for the grid (filtered, sorted, date-grouped). Rebuilt on Dispatchers.Default, never on the UI thread. */
+    val mediaState: StateFlow<MediaUiState> = combine(
+        allMedia,
+        sort,
+        filter,
+        query.debounce { if (it.isEmpty()) 0L else 200L }.distinctUntilChanged(),
+        album
+    ) { all, currentSort, currentFilter, currentQuery, currentAlbum ->
+        if (all == null) MediaUiState() else MediaListBuilder.build(all, currentSort, currentFilter, currentQuery, currentAlbum)
+    }
+        .flowOn(Dispatchers.Default)
+        .stateIn(viewModelScope, SharingStarted.Eagerly, MediaUiState())
+
+    /** Albums come from the same cache — no extra MediaStore scan when opening the Albums tab. */
+    val albums: StateFlow<List<Album>> = allMedia
+        .filterNotNull()
+        .map { MediaListBuilder.albums(it) }
+        .flowOn(Dispatchers.Default)
+        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
+    val albumsLoading: StateFlow<Boolean> = allMedia
+        .map { it == null }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, true)
+
+    init {
+        // Drop selected items that disappeared (deleted elsewhere, moved, etc.).
+        viewModelScope.launch {
+            allMedia.filterNotNull().collect { list ->
+                if (selected.value.isNotEmpty()) {
+                    val keys = withContext(Dispatchers.Default) { list.mapTo(HashSet()) { it.key } }
+                    selected.update { it.intersect(keys) }
+                }
+            }
+        }
+    }
+
+    /** Start loading once storage access exists (also called again if access is granted later). */
+    fun setAccess(granted: Boolean) { accessGranted.value = granted }
+
+    /** Force a re-query, e.g. when the app returns to the foreground. Unchanged results cause no UI update. */
+    fun refresh() { if (allMedia.value != null) refreshTick.update { it + 1 } }
 
     fun setSort(value: SortOrder) { viewModelScope.launch { prefs.setSort(value) } }
     fun setGrid(value: Int) { viewModelScope.launch { prefs.setGrid(value) } }
@@ -93,14 +150,6 @@ class HomeViewModel @Inject constructor(
 
     fun clearSelection() { selected.value = emptySet() }
     fun selectAll(keys: List<String>) { selected.value = keys.toSet() }
-
-    fun loadAlbums() {
-        viewModelScope.launch {
-            albumsLoading.value = true
-            albums.value = getAlbums()
-            albumsLoading.value = false
-        }
-    }
 
     /** Kicks off deletion; if the platform requires user confirmation, emits [HomeEvent.ConfirmDelete] instead of deleting immediately. */
     fun requestDelete(items: List<MediaItem>) {

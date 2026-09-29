@@ -61,8 +61,6 @@ dependencies {
     implementation("androidx.hilt:hilt-navigation-compose:1.2.0")
     implementation("com.google.dagger:hilt-android:2.57.2")
     kapt("com.google.dagger:hilt-compiler:2.57.2")
-    implementation("androidx.paging:paging-runtime:3.5.1")
-    implementation("androidx.paging:paging-compose:3.5.1")
     implementation("androidx.work:work-runtime-ktx:2.10.5")
     implementation("androidx.datastore:datastore-preferences:1.1.7")
     implementation("androidx.media3:media3-exoplayer:1.10.1")
@@ -72,4 +70,6 @@ dependencies {
     implementation("io.coil-kt.coil3:coil-network-okhttp:3.3.0")
     implementation("io.coil-kt.coil3:coil-video:3.3.0")
     implementation("androidx.exifinterface:exifinterface:1.3.7")
+    implementation("androidx.paging:paging-runtime:3.5.1")
+    implementation("androidx.paging:paging-compose:3.5.1")
 }

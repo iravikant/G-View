@@ -1,3 +1,5 @@
+@file:OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class, androidx.compose.foundation.ExperimentalFoundationApi::class)
+
 package com.acoder.gallery.presentation.albums
 
 import androidx.compose.foundation.layout.*
@@ -8,7 +10,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Collections
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
@@ -28,7 +29,6 @@ import com.acoder.gallery.presentation.home.HomeViewModel
 fun AlbumsScreen(vm: HomeViewModel, nav: NavHostController) {
     val albums by vm.albums.collectAsState()
     val loading by vm.albumsLoading.collectAsState()
-    LaunchedEffect(Unit) { vm.loadAlbums() }
 
     Scaffold(topBar = { TopAppBar(title = { Text("Albums") }) }) { padding ->
         Box(Modifier.padding(padding).fillMaxSize()) {

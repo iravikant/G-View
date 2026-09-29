@@ -6,8 +6,12 @@ import android.content.ContentValues
 import android.content.Context
 import android.database.Cursor
 import android.net.Uri
+import android.database.ContentObserver
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.provider.MediaStore
+import androidx.paging.PagingSource
 import com.acoder.gallery.domain.model.Album
 import com.acoder.gallery.domain.model.MediaFilter
 import com.acoder.gallery.domain.model.MediaItem
@@ -17,6 +21,17 @@ import com.acoder.gallery.domain.repository.MediaOpResult
 import com.acoder.gallery.domain.repository.MediaRepository
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.FlowPreview
+import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.flow.conflate
+import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.flow.mapLatest
+import kotlinx.coroutines.flow.onStart
 import kotlinx.coroutines.withContext
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -27,43 +42,46 @@ class MediaStoreRepository @Inject constructor(@ApplicationContext private val c
     private val imageUri = MediaStore.Images.Media.EXTERNAL_CONTENT_URI
     private val videoUri = MediaStore.Video.Media.EXTERNAL_CONTENT_URI
 
-    override suspend fun queryMedia(sort: SortOrder, filter: MediaFilter, query: String, albumId: String?): List<MediaItem> = withContext(Dispatchers.IO) {
+    @OptIn(FlowPreview::class, ExperimentalCoroutinesApi::class)
+    override fun observeMedia(): Flow<List<MediaItem>> = callbackFlow<Unit> {
+        val observer = object : ContentObserver(Handler(Looper.getMainLooper())) {
+            override fun onChange(selfChange: Boolean) { trySend(Unit) }
+        }
+        resolver.registerContentObserver(imageUri, true, observer)
+        resolver.registerContentObserver(videoUri, true, observer)
+        awaitClose { resolver.unregisterContentObserver(observer) }
+    }
+        .conflate()
+        // MediaStore fires many notifications during bulk operations; coalesce them.
+        .debounce(400)
+        .onStart { emit(Unit) }
+        .mapLatest { queryAll() }
+        .distinctUntilChanged()
+        .flowOn(Dispatchers.IO)
+
+    private fun queryAll(): List<MediaItem> {
         val out = ArrayList<MediaItem>()
-        queryCollection(imageUri, MediaType.IMAGE, filter, query, albumId, out)
-        queryCollection(videoUri, MediaType.VIDEO, filter, query, albumId, out)
-        out.sortWith(comparator(sort))
-        out
+        return try {
+            queryCollection(imageUri, MediaType.IMAGE, out)
+            queryCollection(videoUri, MediaType.VIDEO, out)
+            out.sortWith(compareByDescending<MediaItem> { it.dateModified }.thenByDescending { it.id }.thenBy { it.type })
+            out
+        } catch (_: SecurityException) {
+            emptyList() // permission not granted (yet)
+        }
     }
 
-    private fun favoriteProjectionColumn(): String? = if (Build.VERSION.SDK_INT >= 29) "is_favorite" else null
-
-    private fun queryCollection(base: Uri, type: MediaType, filter: MediaFilter, query: String, albumId: String?, out: MutableList<MediaItem>) {
-        val p = arrayListOf<String>()
-        val a = arrayListOf<String>()
-        if (query.isNotBlank()) { p += "${MediaStore.MediaColumns.DISPLAY_NAME} LIKE ?"; a += "%${query.trim()}%" }
-        if (albumId != null && albumId != "RECENT") { p += "${MediaStore.MediaColumns.BUCKET_ID} = ?"; a += albumId }
-        if (albumId == "RECENT") { p += "${MediaStore.MediaColumns.DATE_ADDED} >= ?"; a += (System.currentTimeMillis() / 1000 - 7 * 86400).toString() }
-        when (filter) {
-            MediaFilter.PHOTOS -> if (type != MediaType.IMAGE) return
-            MediaFilter.VIDEOS -> if (type != MediaType.VIDEO) return
-            MediaFilter.LARGE -> { p += "${MediaStore.MediaColumns.SIZE} >= ?"; a += (25L * 1024 * 1024).toString() }
-            MediaFilter.RECENT -> { p += "${MediaStore.MediaColumns.DATE_ADDED} >= ?"; a += (System.currentTimeMillis() / 1000 - 7 * 86400).toString() }
-            MediaFilter.FAVORITES -> {
-                if (Build.VERSION.SDK_INT < 29) return
-                p += "is_favorite = 1"
-            }
-            else -> Unit
-        }
-        val favoriteCol = favoriteProjectionColumn()
-        val projection = arrayOf(
+    private fun queryCollection(base: Uri, type: MediaType, out: MutableList<MediaItem>) {
+        val favoriteCol = if (Build.VERSION.SDK_INT >= 29) "is_favorite" else null
+        val columns = mutableListOf(
             MediaStore.MediaColumns._ID, MediaStore.MediaColumns.DISPLAY_NAME, MediaStore.MediaColumns.DATE_TAKEN,
             MediaStore.MediaColumns.DATE_ADDED, MediaStore.MediaColumns.DATE_MODIFIED, MediaStore.MediaColumns.SIZE,
             MediaStore.MediaColumns.WIDTH, MediaStore.MediaColumns.HEIGHT, MediaStore.MediaColumns.MIME_TYPE,
-            MediaStore.MediaColumns.BUCKET_ID, MediaStore.MediaColumns.BUCKET_DISPLAY_NAME, MediaStore.MediaColumns.RELATIVE_PATH,
-            MediaStore.Video.Media.DURATION
-        ).let { if (favoriteCol != null) it + favoriteCol else it }
-        val order = "${MediaStore.MediaColumns.DATE_MODIFIED} DESC"
-        resolver.query(base, projection, p.joinToString(" AND ").ifBlank { null }, a.toTypedArray().ifEmpty { null }, order)?.use { c ->
+            MediaStore.MediaColumns.BUCKET_ID, MediaStore.MediaColumns.BUCKET_DISPLAY_NAME, MediaStore.MediaColumns.RELATIVE_PATH
+        )
+        if (type == MediaType.VIDEO) columns += MediaStore.Video.Media.DURATION
+        if (favoriteCol != null) columns += favoriteCol
+        resolver.query(base, columns.toTypedArray(), null, null, "${MediaStore.MediaColumns.DATE_MODIFIED} DESC")?.use { c ->
             val idIndex = c.getColumnIndexOrThrow(MediaStore.MediaColumns._ID)
             while (c.moveToNext()) {
                 val itemId = c.getLong(idIndex)
@@ -72,55 +90,47 @@ class MediaStoreRepository @Inject constructor(@ApplicationContext private val c
         }
     }
 
-    override fun pagingSource(sort: SortOrder, filter: MediaFilter, query: String, albumId: String?) =
+    override fun pagingSource(sort: SortOrder, filter: MediaFilter, query: String, albumId: String?): PagingSource<String, MediaItem> =
         MediaStorePagingSource(resolver, sort, filter, query, albumId)
 
     override suspend fun queryAlbums(): List<Album> = withContext(Dispatchers.IO) {
         val map = LinkedHashMap<String, Pair<Album, Int>>()
         fun collect(base: Uri) {
-            val projection = arrayOf(
-                MediaStore.MediaColumns._ID, MediaStore.MediaColumns.BUCKET_ID,
-                MediaStore.MediaColumns.BUCKET_DISPLAY_NAME, MediaStore.MediaColumns.RELATIVE_PATH
-            )
+            val projection = arrayOf(MediaStore.MediaColumns._ID, MediaStore.MediaColumns.BUCKET_ID, MediaStore.MediaColumns.BUCKET_DISPLAY_NAME, MediaStore.MediaColumns.RELATIVE_PATH)
             resolver.query(base, projection, null, null, "${MediaStore.MediaColumns.DATE_MODIFIED} DESC")?.use { c ->
                 while (c.moveToNext()) {
-                    val bucketId = c.getStringOrNull(MediaStore.MediaColumns.BUCKET_ID) ?: continue
-                    val current = map[bucketId]
+                    val id = c.getStringOrNull(MediaStore.MediaColumns.BUCKET_ID) ?: continue
+                    val current = map[id]
                     if (current == null) {
                         val mediaId = c.getLong(c.getColumnIndexOrThrow(MediaStore.MediaColumns._ID))
-                        val album = Album(
-                            bucketId,
-                            c.getStringOrNull(MediaStore.MediaColumns.BUCKET_DISPLAY_NAME) ?: "Other",
-                            1,
-                            ContentUris.withAppendedId(base, mediaId),
-                            c.getStringOrNull(MediaStore.MediaColumns.RELATIVE_PATH)
-                        )
-                        map[bucketId] = album to 1
+                        val album = Album(id, c.getStringOrNull(MediaStore.MediaColumns.BUCKET_DISPLAY_NAME) ?: "Other", 1, ContentUris.withAppendedId(base, mediaId), c.getStringOrNull(MediaStore.MediaColumns.RELATIVE_PATH))
+                        map[id] = album to 1
                     } else {
-                        map[bucketId] = current.first to current.second + 1
+                        map[id] = current.first to current.second + 1
                     }
                 }
             }
         }
-        collect(imageUri); collect(videoUri)
+        collect(imageUri)
+        collect(videoUri)
         val result = map.values.map { it.first.copy(count = it.second) }.toMutableList()
-        result.sortByDescending { it.count }
         try {
             val cutoff = System.currentTimeMillis() / 1000 - 7 * 86400
             val projection = arrayOf(MediaStore.MediaColumns._ID, MediaStore.MediaColumns.DATE_ADDED)
-            var recentCount = 0
-            var recentCover: Uri? = null
+            val recent = ArrayList<Uri>()
             fun recentCollect(base: Uri) {
-                resolver.query(base, projection, "${MediaStore.MediaColumns.DATE_ADDED} >= ?", arrayOf(cutoff.toString()), "${MediaStore.MediaColumns.DATE_ADDED} DESC")?.use { c ->
+                resolver.query(base, projection, "${MediaStore.MediaColumns.DATE_ADDED}>=?", arrayOf(cutoff.toString()), "${MediaStore.MediaColumns.DATE_ADDED} DESC")?.use { c ->
                     while (c.moveToNext()) {
-                        recentCount++
-                        if (recentCover == null) recentCover = ContentUris.withAppendedId(base, c.getLong(c.getColumnIndexOrThrow(MediaStore.MediaColumns._ID)))
+                        recent += ContentUris.withAppendedId(base, c.getLong(c.getColumnIndexOrThrow(MediaStore.MediaColumns._ID)))
                     }
                 }
             }
-            recentCollect(imageUri); recentCollect(videoUri)
-            if (recentCount > 0) result.add(0, Album("RECENT", "Recent", recentCount, recentCover, null))
-        } catch (_: Exception) { }
+            recentCollect(imageUri)
+            recentCollect(videoUri)
+            if (recent.isNotEmpty()) {
+                result.add(0, Album("RECENT", "Recent", recent.size, recent.first(), null))
+            }
+        } catch (_: Exception) {}
         result
     }
 
@@ -171,17 +181,6 @@ class MediaStoreRepository @Inject constructor(@ApplicationContext private val c
 
     suspend fun writeBytes(uri: Uri, bytes: ByteArray) = withContext(Dispatchers.IO) {
         resolver.openOutputStream(uri)?.use { it.write(bytes) } ?: error("Unable to open output")
-    }
-
-    private fun comparator(s: SortOrder) = when (s) {
-        SortOrder.NEWEST -> compareByDescending<MediaItem> { it.displayDate }
-        SortOrder.OLDEST -> compareBy<MediaItem> { it.displayDate }
-        SortOrder.NAME_ASC -> compareBy { it.name.lowercase() }
-        SortOrder.NAME_DESC -> compareByDescending { it.name.lowercase() }
-        SortOrder.SIZE_DESC -> compareByDescending { it.size }
-        SortOrder.SIZE_ASC -> compareBy { it.size }
-        SortOrder.PHOTOS_FIRST -> compareBy<MediaItem> { if (it.isVideo) 1 else 0 }.thenByDescending { it.displayDate }
-        SortOrder.VIDEOS_FIRST -> compareBy<MediaItem> { if (it.isVideo) 0 else 1 }.thenByDescending { it.displayDate }
     }
 
     private fun Cursor.toMediaItem(itemId: Long, uri: Uri, type: MediaType, favoriteCol: String?): MediaItem = MediaItem(

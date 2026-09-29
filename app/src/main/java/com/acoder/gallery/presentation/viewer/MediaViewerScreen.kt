@@ -1,3 +1,5 @@
+@file:OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class, androidx.compose.foundation.ExperimentalFoundationApi::class)
+
 package com.acoder.gallery.presentation.viewer
 
 import android.app.Activity
@@ -6,8 +8,10 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.calculatePan
+import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
@@ -26,6 +30,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
@@ -166,11 +171,39 @@ private fun ZoomableImage(item: MediaItem) {
                 scaleX = scale; scaleY = scale
                 translationX = offsetX; translationY = offsetY
             }
+            // Custom gesture handling instead of detectTransformGestures: that detector consumes
+            // every single-finger drag unconditionally, which starved the parent HorizontalPager
+            // of any pointer events and made swiping to the next photo impossible even at 1x zoom.
+            // Here a pinch (2+ pointers) always zooms, but a one-finger drag is only consumed (to
+            // pan the photo) once it's actually zoomed in — at 1x the drag is left untouched so the
+            // pager can swipe pages with it.
             .pointerInput(item.key) {
-                detectTransformGestures { _, pan, zoom, _ ->
-                    val newScale = (scale * zoom).coerceIn(1f, 6f)
-                    scale = newScale
-                    if (newScale <= 1f) { offsetX = 0f; offsetY = 0f } else { offsetX += pan.x; offsetY += pan.y }
+                awaitEachGesture {
+                    do {
+                        val event = awaitPointerEvent()
+                        val pointerCount = event.changes.size
+                        if (pointerCount >= 2) {
+                            val zoomChange = event.calculateZoom()
+                            val panChange = event.calculatePan()
+                            val newScale = (scale * zoomChange).coerceIn(1f, 6f)
+                            scale = newScale
+                            if (newScale <= 1f) {
+                                offsetX = 0f; offsetY = 0f
+                            } else {
+                                offsetX += panChange.x; offsetY += panChange.y
+                            }
+                            event.changes.forEach { it.consume() }
+                        } else if (pointerCount == 1 && scale > 1f) {
+                            val change = event.changes.first()
+                            val drag = change.positionChange()
+                            if (drag != androidx.compose.ui.geometry.Offset.Zero) {
+                                offsetX += drag.x
+                                offsetY += drag.y
+                                change.consume()
+                            }
+                        }
+                        // pointerCount == 1 && scale == 1f: leave unconsumed so HorizontalPager can swipe.
+                    } while (event.changes.any { it.pressed })
                 }
             }
             .pointerInput(item.key) {

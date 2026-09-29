@@ -6,9 +6,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Collections
 import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.outlined.Folder
-import androidx.compose.material.icons.outlined.Image
-import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
@@ -16,6 +13,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -45,9 +43,9 @@ import com.acoder.gallery.presentation.viewer.MediaViewerScreen
 private data class Tab(val route: String, val label: String, val selected: androidx.compose.ui.graphics.vector.ImageVector, val unselected: androidx.compose.ui.graphics.vector.ImageVector)
 
 private val TABS = listOf(
-    Tab("media", "Photos", Icons.Filled.PhotoLibrary, Icons.Outlined.Image),
-    Tab("albums", "Albums", Icons.Filled.Collections, Icons.Outlined.Folder),
-    Tab("settings", "Settings", Icons.Filled.Settings, Icons.Outlined.Settings)
+    Tab("media", "Photos", Icons.Filled.PhotoLibrary, Icons.Filled.PhotoLibrary),
+    Tab("albums", "Albums", Icons.Filled.Collections, Icons.Filled.Collections),
+    Tab("settings", "Settings", Icons.Filled.Settings, Icons.Filled.Settings)
 )
 
 @Composable
@@ -58,11 +56,18 @@ fun GalleryApp(vm: HomeViewModel = hiltViewModel()) {
 
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_RESUME) access = PermissionManager.hasAnyAccess(context)
+            if (event == Lifecycle.Event.ON_RESUME) {
+                access = PermissionManager.hasAnyAccess(context)
+                // Cheap background re-query; covers partial-access changes. Unchanged data = no UI update.
+                if (access) vm.refresh()
+            }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
+
+    // Start loading the library in the ViewModel as soon as access exists.
+    LaunchedEffect(access) { vm.setAccess(access) }
 
     val theme by vm.theme.collectAsState()
     val dynamicColor by vm.dynamicColor.collectAsState()

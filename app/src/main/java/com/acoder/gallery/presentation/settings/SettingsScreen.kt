@@ -1,3 +1,5 @@
+@file:OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class, androidx.compose.foundation.ExperimentalFoundationApi::class)
+
 package com.acoder.gallery.presentation.settings
 
 import android.os.Build
@@ -117,4 +119,4 @@ private fun SwitchRow(title: String, subtitle: String, checked: Boolean, onCheck
 }
 
 private fun Modifier.clickableListItem(onClick: () -> Unit): Modifier =
-    this.then(Modifier.clickable(onClick = onClick))
+    this.clickable(onClick = onClick)

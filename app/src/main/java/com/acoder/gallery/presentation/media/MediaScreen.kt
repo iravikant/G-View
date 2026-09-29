@@ -1,3 +1,5 @@
+@file:OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class, androidx.compose.foundation.ExperimentalFoundationApi::class)
+
 package com.acoder.gallery.presentation.media
 
 import android.app.Activity
@@ -19,6 +21,8 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
@@ -52,7 +56,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavHostController
-import androidx.paging.compose.collectAsLazyPagingItems
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.workDataOf
@@ -64,7 +67,6 @@ import com.acoder.gallery.core.media.MediaOperationWorker
 import com.acoder.gallery.core.pdf.PdfGenerator
 import com.acoder.gallery.core.sharing.ExportManager
 import com.acoder.gallery.core.sharing.MediaShareManager
-import com.acoder.gallery.core.util.dateLabel
 import com.acoder.gallery.core.util.formatDuration
 import com.acoder.gallery.domain.model.*
 import com.acoder.gallery.presentation.common.EmptyState
@@ -82,7 +84,7 @@ fun MediaScreen(vm: HomeViewModel, nav: NavHostController) {
     val scope = rememberCoroutineScope()
     val snackbarHost = remember { SnackbarHostState() }
 
-    val items = vm.paging.collectAsLazyPagingItems()
+    val state by vm.mediaState.collectAsState()
     val selected by vm.selected.collectAsState()
     val query by vm.query.collectAsState()
     val grid by vm.grid.collectAsState()
@@ -100,19 +102,17 @@ fun MediaScreen(vm: HomeViewModel, nav: NavHostController) {
     var moveMode by remember { mutableStateOf("copy") }
     var pendingDeleteKeys by remember { mutableStateOf<Set<String>>(emptySet()) }
 
-    val snapshot = items.itemSnapshotList.items
-    val selectedLoaded = remember(snapshot, selected) { snapshot.filter { it.key in selected } }
+    val snapshot = state.items
+    val selectedLoaded = remember(snapshot, selected) { if (selected.isEmpty()) emptyList() else snapshot.filter { it.key in selected } }
 
     val deleteLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) { result ->
         if (result.resultCode == Activity.RESULT_OK) {
-            vm.onDeleteConfirmed(pendingDeleteKeys)
-            items.refresh()
+            vm.onDeleteConfirmed(pendingDeleteKeys) // list updates itself via the MediaStore observer
         }
     }
     val favoriteLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) { result ->
         if (result.resultCode == Activity.RESULT_OK) {
             vm.notify("Favorites updated")
-            items.refresh()
         }
         vm.clearSelection()
     }
@@ -133,8 +133,6 @@ fun MediaScreen(vm: HomeViewModel, nav: NavHostController) {
             vm.clearSelection()
         }
     }
-
-    LaunchedEffect(Unit) { vm.loadAlbums() }
 
     LaunchedEffect(Unit) {
         vm.events.collect { event ->
@@ -215,17 +213,17 @@ fun MediaScreen(vm: HomeViewModel, nav: NavHostController) {
     ) { padding ->
         Box(Modifier.padding(padding).fillMaxSize()) {
             when {
-                items.itemCount == 0 && items.loadState.refresh is androidx.paging.LoadState.Loading ->
+                state.isLoading ->
                     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
-                items.itemCount == 0 && query.isNotBlank() ->
+                state.items.isEmpty() && query.isNotBlank() ->
                     EmptyState(Icons.Default.SearchOff, "No matches for \u201c$query\u201d", "Try a different search term.")
-                items.itemCount == 0 ->
+                state.items.isEmpty() ->
                     EmptyState(Icons.Default.PhotoLibrary, "Nothing here yet", "Photos and videos you add will show up in this view.")
-                else -> MediaGrid(items, grid, selected, onTap = { index, item ->
+                else -> MediaGrid(state.rows, grid, selected, onTap = { item ->
                     if (selected.isNotEmpty()) {
                         vm.toggle(item.key)
                     } else {
-                        vm.openViewer(snapshot.filterNotNull(), index)
+                        vm.openViewer(state.items, state.items.indexOfFirst { it.key == item.key }.coerceAtLeast(0))
                         nav.navigate(if (item.isVideo) "video" else "viewer")
                     }
                 }, onLong = { vm.toggle(it.key) })
@@ -241,11 +239,20 @@ fun MediaScreen(vm: HomeViewModel, nav: NavHostController) {
     ) {
         pdfConfirm = false
         val chosen = selectedLoaded.filter { !it.isVideo }
-        if (chosen.isNotEmpty()) {
+        if (chosen.isEmpty()) {
+            vm.notify("Select at least one photo to make a PDF")
+        } else {
             scope.launch(Dispatchers.IO) {
-                val file = PdfGenerator.generate(context, chosen.map { it.uri })
-                val saved = ExportManager.saveToDownloads(context, file, "application/pdf", "Gallery_${System.currentTimeMillis()}.pdf")
-                withContext(Dispatchers.Main) { saved?.let { MediaShareManager.share(context, listOf(it), "application/pdf") } }
+                try {
+                    val file = PdfGenerator.generate(context, chosen.map { it.uri })
+                    val saved = ExportManager.saveToDownloads(context, file, "application/pdf", "Gallery_${System.currentTimeMillis()}.pdf")
+                    withContext(Dispatchers.Main) {
+                        if (saved != null) MediaShareManager.share(context, listOf(saved), "application/pdf")
+                        else vm.notify("Couldn't save the PDF")
+                    }
+                } catch (e: Exception) {
+                    withContext(Dispatchers.Main) { vm.notify("PDF creation failed: ${e.message ?: "unknown error"}") }
+                }
             }
         }
         vm.clearSelection()
@@ -258,11 +265,20 @@ fun MediaScreen(vm: HomeViewModel, nav: NavHostController) {
     ) {
         collageConfirm = false
         val chosen = selectedLoaded.filter { !it.isVideo }
-        if (chosen.isNotEmpty()) {
+        if (chosen.isEmpty()) {
+            vm.notify("Select at least one photo to make a collage")
+        } else {
             scope.launch(Dispatchers.IO) {
-                val file = CollageGenerator.generate(context, chosen.map { it.uri })
-                val saved = ExportManager.saveToDownloads(context, file, "image/jpeg", "Collage_${System.currentTimeMillis()}.jpg")
-                withContext(Dispatchers.Main) { saved?.let { MediaShareManager.share(context, listOf(it), "image/jpeg") } }
+                try {
+                    val file = CollageGenerator.generate(context, chosen.map { it.uri })
+                    val saved = ExportManager.saveToDownloads(context, file, "image/jpeg", "Collage_${System.currentTimeMillis()}.jpg")
+                    withContext(Dispatchers.Main) {
+                        if (saved != null) MediaShareManager.share(context, listOf(saved), "image/jpeg")
+                        else vm.notify("Couldn't save the collage")
+                    }
+                } catch (e: Exception) {
+                    withContext(Dispatchers.Main) { vm.notify("Collage creation failed: ${e.message ?: "unknown error"}") }
+                }
             }
         }
         vm.clearSelection()
@@ -350,41 +366,42 @@ private fun SelectionActionBar(
     }
 }
 
-@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun MediaGrid(
-    items: androidx.paging.compose.LazyPagingItems<MediaItem>,
+    rows: List<GridRow>,
     columns: Int,
     selected: Set<String>,
-    onTap: (Int, MediaItem) -> Unit,
+    onTap: (MediaItem) -> Unit,
     onLong: (MediaItem) -> Unit
 ) {
+    // Stable keys keep the scroll position anchored when the list updates underneath the user.
+    val gridState = rememberLazyGridState()
+    val selectionActive = selected.isNotEmpty()
     LazyVerticalGrid(
+        state = gridState,
         columns = GridCells.Fixed(columns.coerceIn(2, 5)),
         contentPadding = PaddingValues(2.dp),
         modifier = Modifier.fillMaxSize()
     ) {
-        for (index in 0 until items.itemCount) {
-            val item = items.peek(index) ?: continue
-            val previous = if (index > 0) items.peek(index - 1) else null
-            if (previous == null || previous.displayDate.dateLabel() != item.displayDate.dateLabel()) {
-                item(key = "date-${item.key}", span = { GridItemSpan(maxLineSpan) }) {
-                    Text(
-                        item.displayDate.dateLabel(),
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.SemiBold,
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)
-                    )
-                }
-            }
-            item(key = item.key, contentType = item.type) {
-                val current = items[index] ?: item
-                MediaTile(
-                    item = current,
-                    selectionActive = selected.isNotEmpty(),
-                    isSelected = current.key in selected,
-                    onTap = { onTap(index, current) },
-                    onLong = { onLong(current) }
+        items(
+            items = rows,
+            key = { it.key },
+            span = { row -> if (row is GridRow.Header) GridItemSpan(maxLineSpan) else GridItemSpan(1) },
+            contentType = { row -> if (row is GridRow.Header) "header" else (row as GridRow.Media).item.type }
+        ) { row ->
+            when (row) {
+                is GridRow.Header -> Text(
+                    row.label,
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)
+                )
+                is GridRow.Media -> MediaTile(
+                    item = row.item,
+                    selectionActive = selectionActive,
+                    isSelected = row.item.key in selected,
+                    onTap = { onTap(row.item) },
+                    onLong = { onLong(row.item) }
                 )
             }
         }
