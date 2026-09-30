@@ -140,20 +140,20 @@ data class BarAction(val icon: ImageVector, val label: String, val onClick: () -
 /** Floating pill of icon+label actions shown while photos are selected. */
 @Composable
 fun FloatingActionPill(actions: List<BarAction>, modifier: Modifier = Modifier) {
-    Box(modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = 16.dp, vertical = 14.dp), contentAlignment = Alignment.Center) {
+    Box(modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = 10.dp, vertical = 8.dp), contentAlignment = Alignment.Center) {
         Surface(
-            shape = RoundedCornerShape(36.dp),
+            shape = RoundedCornerShape(25.dp),
             color = MaterialTheme.colorScheme.surfaceContainerHigh,
             shadowElevation = 8.dp
         ) {
-            Row(Modifier.padding(horizontal = 8.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+            Row(Modifier.padding(horizontal = 8.dp, vertical = 5.dp), horizontalArrangement = Arrangement.spacedBy(2.dp)) {
                 actions.forEach { action ->
                     val tint = if (action.destructive) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface
                     Column(
                         Modifier
                             .clip(RoundedCornerShape(24.dp))
                             .clickable(onClick = action.onClick)
-                            .padding(horizontal = 14.dp, vertical = 8.dp),
+                            .padding(horizontal = 14.dp, vertical = 5.dp),
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
                         Icon(action.icon, action.label, Modifier.size(24.dp), tint = tint)

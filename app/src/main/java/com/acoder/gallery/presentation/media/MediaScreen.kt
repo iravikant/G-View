@@ -3,6 +3,7 @@
 package com.acoder.gallery.presentation.media
 
 import android.content.Intent
+import android.util.Log
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -68,6 +69,7 @@ import androidx.compose.material3.InputChip
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -94,7 +96,11 @@ import androidx.navigation.NavHostController
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.workDataOf
+import com.acoder.gallery.core.collage.CollageConfig
+import com.acoder.gallery.core.collage.CollageFrame
 import com.acoder.gallery.core.collage.CollageGenerator
+import com.acoder.gallery.core.collage.CollageLayout
+import com.acoder.gallery.core.collage.CollagePreviewDialog
 import com.acoder.gallery.core.media.MediaOperationWorker
 import com.acoder.gallery.core.sharing.ExportManager
 import com.acoder.gallery.core.sharing.MediaShareManager
@@ -225,7 +231,29 @@ fun MediaScreen(vm: HomeViewModel, nav: NavHostController, isAlbum: Boolean = fa
                         CircleButton(Icons.AutoMirrored.Filled.ArrowBack, "Back", { nav.popBackStack() })
                         Spacer(Modifier.width(12.dp))
                     }
-                    LargeTitle(if (isAlbum) albumName.orEmpty() else "Photos", Modifier.weight(1f))
+                    Text(
+                        if (isAlbum) albumName.orEmpty() else "Photos",
+                        modifier = Modifier.weight(1f),
+                        fontSize = 28.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onBackground
+                    )
+                    // when line exceed more than 1  fontSize will be changed to 24sp
+                   /* val title = if (isAlbum) albumName.orEmpty() else "Photos"
+                   // Reset whenever the title changes
+                    var fontSize by remember(title) { mutableStateOf(28.sp) }
+                    Text(
+                        text = title,
+                        modifier = Modifier.weight(1f),
+                        fontSize = fontSize,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onBackground,
+                        onTextLayout = { result ->
+                            if (result.lineCount > 1 && fontSize != 24.sp) {
+                                fontSize = 24.sp
+                            }
+                        }
+                    )*/
                     CircleButton(Icons.Default.Search, "Search", { searchOpen = !searchOpen; if (!searchOpen) vm.setQuery("") })
                     Spacer(Modifier.width(10.dp))
                     Box {
@@ -373,35 +401,43 @@ fun MediaScreen(vm: HomeViewModel, nav: NavHostController, isAlbum: Boolean = fa
         )
     }
 
-    if (collageConfirm) GalleryDialog(
-        title = "Create collage?",
-        message = "${selectedItems.count { !it.isVideo }} selected photo(s) will be arranged into a collage and shared.",
-        confirmLabel = "Create",
-        destructive = false,
-        onDismiss = { collageConfirm = false },
-        onConfirm = {
-            collageConfirm = false
-            val chosen = selectedItems.filter { !it.isVideo }
-            if (chosen.isEmpty()) {
+    if (collageConfirm) {
+        val photos = selectedItems.filter { !it.isVideo }
+        if (photos.isEmpty()) {
+            LaunchedEffect(Unit) {
                 vm.notify("Select at least one photo to make a collage")
-            } else {
-                scope.launch(Dispatchers.IO) {
-                    try {
-                        val file = CollageGenerator.generate(context, chosen.map { it.uri })
-                        val saved = ExportManager.saveToDownloads(context, file, "image/jpeg", "Collage_${System.currentTimeMillis()}.jpg")
-                        withContext(Dispatchers.Main) {
-                            if (saved != null) MediaShareManager.share(context, listOf(saved), "image/jpeg")
-                            else vm.notify("Couldn't save the collage")
-                        }
-                    } catch (e: Exception) {
-                        withContext(Dispatchers.Main) { vm.notify("Collage creation failed: ${e.message ?: "unknown error"}") }
-                    }
-                }
+                collageConfirm = false
             }
-            vm.clearSelection()
+        } else {
+            val uris = remember { photos.map { it.uri } }
+            CollagePreviewDialog(
+                uris = uris,
+                onDismiss = { collageConfirm = false },
+                onCreate = { config ->
+                    collageConfirm = false
+                    vm.notify("Creating collage…")
+                    scope.launch(Dispatchers.IO) {
+                        try {
+                            val file = CollageGenerator.generate(context, uris, config)
+                            val saved = ExportManager.saveToDownloads(
+                                context, file, "image/jpeg", "Collage_${System.currentTimeMillis()}.jpg"
+                            )
+                            withContext(Dispatchers.Main) {
+                                if (saved != null) MediaShareManager.share(context, listOf(saved), "image/jpeg")
+                                else vm.notify("Couldn't save the collage")
+                            }
+                        } catch (t: Throwable) {
+                            Log.e("Collage", "Collage creation failed", t)
+                            withContext(Dispatchers.Main) {
+                                vm.notify("Collage creation failed: ${t.message ?: t::class.java.simpleName}")
+                            }
+                        }
+                    }
+                    vm.clearSelection()
+                }
+            )
         }
-    )
-
+    }
     if (moreOpen) AlertDialog(
         onDismissRequest = { moreOpen = false },
         title = { Text("${selectedItems.size} selected") },

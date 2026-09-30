@@ -84,7 +84,13 @@ fun AlbumsScreen(vm: HomeViewModel, nav: NavHostController) {
             Modifier.fillMaxWidth().statusBarsPadding().padding(start = 20.dp, end = 16.dp, top = 12.dp, bottom = 8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            LargeTitle("Albums", Modifier.weight(1f))
+            Text(
+                "Albums",
+                modifier = Modifier.weight(1f),
+                fontSize = 28.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onBackground
+            )
             Box {
                 CircleButton(Icons.Default.MoreVert, "More", { menuOpen = true })
                 DropdownMenu(menuOpen, { menuOpen = false }) {
@@ -108,8 +114,8 @@ fun AlbumsScreen(vm: HomeViewModel, nav: NavHostController) {
             else -> LazyVerticalGrid(
                 columns = GridCells.Fixed(3),
                 contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = bottom),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                verticalArrangement = Arrangement.spacedBy(14.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
                 modifier = Modifier.fillMaxSize()
             ) {
                 if (pinned.isNotEmpty()) {
@@ -134,7 +140,7 @@ private fun AlbumTile(album: Album, onClick: () -> Unit) {
     Column(Modifier.clickable(onClick = onClick), horizontalAlignment = Alignment.CenterHorizontally) {
         MediaThumb(
             album.coverUri,
-            Modifier.fillMaxWidth().aspectRatio(1f).clip(RoundedCornerShape(24.dp)),
+            Modifier.fillMaxWidth().aspectRatio(1f).clip(RoundedCornerShape(20.dp)),
             album.name
         )
         AlbumCaption(album.name, "%,d".format(album.count))
@@ -169,15 +175,15 @@ private fun RecycleBinTile(count: Int, cover: android.net.Uri?, onClick: () -> U
 
 @Composable
 private fun AlbumCaption(name: String, count: String) {
-    Spacer(Modifier.height(8.dp))
+    Spacer(Modifier.height(5.dp))
     Text(
         name,
-        fontSize = 16.sp,
+        fontSize = 14.sp,
         fontWeight = FontWeight.Medium,
         maxLines = 1,
         overflow = TextOverflow.Ellipsis,
         textAlign = TextAlign.Center,
         color = MaterialTheme.colorScheme.onBackground
     )
-    Text(count, fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
+    Text(count, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
 }

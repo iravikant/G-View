@@ -33,7 +33,7 @@ class PdfCreator @Inject constructor(@ApplicationContext private val ctx: Contex
         onProgress: (Int) -> Unit
     ): File = withContext(Dispatchers.IO) {
         val dir = File(ctx.cacheDir, "shared").apply { mkdirs() }
-        val file = File(dir, "Gallery_${System.currentTimeMillis()}.pdf")
+        val file = File(dir, "IMG${System.currentTimeMillis()}.pdf")
         val doc = PdfDocument()
         var pagesAdded = 0
         try {

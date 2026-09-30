@@ -9,5 +9,7 @@ import com.acoder.gallery.presentation.home.GalleryApp
 
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
-    override fun onCreate(savedInstanceState: Bundle?) { super.onCreate(savedInstanceState); enableEdgeToEdge(); setContent { GalleryApp() } }
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState); enableEdgeToEdge(); setContent { GalleryApp() }
+    }
 }
