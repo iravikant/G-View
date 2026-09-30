@@ -1,3 +1,4 @@
+/*
 package com.acoder.gallery.core.pdf
 
 import android.content.Context
@@ -13,11 +14,13 @@ import java.io.FileOutputStream
 object PdfGenerator {
     data class Options(val pageWidth: Int = 595, val pageHeight: Int = 842)
 
-    /**
+    */
+/**
      * Combines [uris] into a single PDF, one image per page.
      * Throws instead of returning a silently-empty file so the caller can surface a real error
      * (a previous version could hand back a technically-valid but zero-page/zero-byte PDF).
-     */
+     *//*
+
     fun generate(context: Context, uris: List<Uri>, options: Options = Options()): File {
         val dir = File(context.cacheDir, "shared").apply { mkdirs() }
         val file = File(dir, "Gallery_${System.currentTimeMillis()}.pdf")
@@ -66,3 +69,4 @@ object PdfGenerator {
         return resolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, opts) }
     }
 }
+*/

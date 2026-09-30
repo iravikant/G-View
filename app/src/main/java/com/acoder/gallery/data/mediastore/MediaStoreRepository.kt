@@ -8,6 +8,7 @@ import android.database.Cursor
 import android.net.Uri
 import android.database.ContentObserver
 import android.os.Build
+import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.provider.MediaStore
@@ -42,8 +43,11 @@ class MediaStoreRepository @Inject constructor(@ApplicationContext private val c
     private val imageUri = MediaStore.Images.Media.EXTERNAL_CONTENT_URI
     private val videoUri = MediaStore.Video.Media.EXTERNAL_CONTENT_URI
 
-    @OptIn(FlowPreview::class, ExperimentalCoroutinesApi::class)
-    override fun observeMedia(): Flow<List<MediaItem>> = callbackFlow<Unit> {
+    override val supportsTrash: Boolean get() = Build.VERSION.SDK_INT >= 30
+
+    /** Emits once immediately, then after every (debounced) MediaStore change. */
+    @OptIn(FlowPreview::class)
+    private fun changes(): Flow<Unit> = callbackFlow<Unit> {
         val observer = object : ContentObserver(Handler(Looper.getMainLooper())) {
             override fun onChange(selfChange: Boolean) { trySend(Unit) }
         }
@@ -55,40 +59,14 @@ class MediaStoreRepository @Inject constructor(@ApplicationContext private val c
         // MediaStore fires many notifications during bulk operations; coalesce them.
         .debounce(400)
         .onStart { emit(Unit) }
-        .mapLatest { queryAll() }
-        .distinctUntilChanged()
-        .flowOn(Dispatchers.IO)
 
-    private fun queryAll(): List<MediaItem> {
-        val out = ArrayList<MediaItem>()
-        return try {
-            queryCollection(imageUri, MediaType.IMAGE, out)
-            queryCollection(videoUri, MediaType.VIDEO, out)
-            out.sortWith(compareByDescending<MediaItem> { it.dateModified }.thenByDescending { it.id }.thenBy { it.type })
-            out
-        } catch (_: SecurityException) {
-            emptyList() // permission not granted (yet)
-        }
-    }
+    @OptIn(ExperimentalCoroutinesApi::class)
+    override fun observeMedia(): Flow<List<MediaItem>> =
+        changes().mapLatest { queryAll() }.distinctUntilChanged().flowOn(Dispatchers.IO)
 
-    private fun queryCollection(base: Uri, type: MediaType, out: MutableList<MediaItem>) {
-        val favoriteCol = if (Build.VERSION.SDK_INT >= 29) "is_favorite" else null
-        val columns = mutableListOf(
-            MediaStore.MediaColumns._ID, MediaStore.MediaColumns.DISPLAY_NAME, MediaStore.MediaColumns.DATE_TAKEN,
-            MediaStore.MediaColumns.DATE_ADDED, MediaStore.MediaColumns.DATE_MODIFIED, MediaStore.MediaColumns.SIZE,
-            MediaStore.MediaColumns.WIDTH, MediaStore.MediaColumns.HEIGHT, MediaStore.MediaColumns.MIME_TYPE,
-            MediaStore.MediaColumns.BUCKET_ID, MediaStore.MediaColumns.BUCKET_DISPLAY_NAME, MediaStore.MediaColumns.RELATIVE_PATH
-        )
-        if (type == MediaType.VIDEO) columns += MediaStore.Video.Media.DURATION
-        if (favoriteCol != null) columns += favoriteCol
-        resolver.query(base, columns.toTypedArray(), null, null, "${MediaStore.MediaColumns.DATE_MODIFIED} DESC")?.use { c ->
-            val idIndex = c.getColumnIndexOrThrow(MediaStore.MediaColumns._ID)
-            while (c.moveToNext()) {
-                val itemId = c.getLong(idIndex)
-                out += c.toMediaItem(itemId, ContentUris.withAppendedId(base, itemId), type, favoriteCol)
-            }
-        }
-    }
+    @OptIn(ExperimentalCoroutinesApi::class)
+    override fun observeTrash(): Flow<List<MediaItem>> =
+        changes().mapLatest { if (supportsTrash) queryTrashed() else emptyList() }.distinctUntilChanged().flowOn(Dispatchers.IO)
 
     override fun pagingSource(sort: SortOrder, filter: MediaFilter, query: String, albumId: String?): PagingSource<String, MediaItem> =
         MediaStorePagingSource(resolver, sort, filter, query, albumId)
@@ -134,23 +112,117 @@ class MediaStoreRepository @Inject constructor(@ApplicationContext private val c
         result
     }
 
+    private fun queryAll(): List<MediaItem> {
+        val out = ArrayList<MediaItem>()
+        return try {
+            queryCollection(imageUri, MediaType.IMAGE, out)
+            queryCollection(videoUri, MediaType.VIDEO, out)
+            out.sortWith(compareByDescending<MediaItem> { it.dateModified }.thenByDescending { it.id }.thenBy { it.type })
+            out
+        } catch (_: SecurityException) {
+            emptyList() // permission not granted (yet)
+        }
+    }
+
+    private fun projection(type: MediaType, favoriteCol: String?, extra: String? = null): Array<String> {
+        val columns = mutableListOf(
+            MediaStore.MediaColumns._ID, MediaStore.MediaColumns.DISPLAY_NAME, MediaStore.MediaColumns.DATE_TAKEN,
+            MediaStore.MediaColumns.DATE_ADDED, MediaStore.MediaColumns.DATE_MODIFIED, MediaStore.MediaColumns.SIZE,
+            MediaStore.MediaColumns.WIDTH, MediaStore.MediaColumns.HEIGHT, MediaStore.MediaColumns.MIME_TYPE,
+            MediaStore.MediaColumns.BUCKET_ID, MediaStore.MediaColumns.BUCKET_DISPLAY_NAME, MediaStore.MediaColumns.RELATIVE_PATH
+        )
+        if (type == MediaType.VIDEO) columns += MediaStore.Video.Media.DURATION
+        if (favoriteCol != null) columns += favoriteCol
+        if (extra != null) columns += extra
+        return columns.toTypedArray()
+    }
+
+    private fun queryCollection(base: Uri, type: MediaType, out: MutableList<MediaItem>) {
+        val favoriteCol = if (Build.VERSION.SDK_INT >= 29) "is_favorite" else null
+        resolver.query(base, projection(type, favoriteCol), null, null, "${MediaStore.MediaColumns.DATE_MODIFIED} DESC")?.use { c ->
+            val idIndex = c.getColumnIndexOrThrow(MediaStore.MediaColumns._ID)
+            while (c.moveToNext()) {
+                val itemId = c.getLong(idIndex)
+                out += c.toMediaItem(itemId, ContentUris.withAppendedId(base, itemId), type, favoriteCol)
+            }
+        }
+    }
+
+    private fun queryTrashed(): List<MediaItem> {
+        val out = ArrayList<MediaItem>()
+        return try {
+            queryTrashCollection(imageUri, MediaType.IMAGE, out)
+            queryTrashCollection(videoUri, MediaType.VIDEO, out)
+            out.sortByDescending { it.dateModified }
+            out
+        } catch (_: SecurityException) {
+            emptyList()
+        }
+    }
+
+    private fun queryTrashCollection(base: Uri, type: MediaType, out: MutableList<MediaItem>) {
+        if (Build.VERSION.SDK_INT < 30) return
+        val args = Bundle().apply {
+            putInt(MediaStore.QUERY_ARG_MATCH_TRASHED, MediaStore.MATCH_ONLY)
+            putString(ContentResolver.QUERY_ARG_SQL_SORT_ORDER, "${MediaStore.MediaColumns.DATE_MODIFIED} DESC")
+        }
+        resolver.query(base, projection(type, "is_favorite", "date_expires"), args, null)?.use { c ->
+            val idIndex = c.getColumnIndexOrThrow(MediaStore.MediaColumns._ID)
+            while (c.moveToNext()) {
+                val itemId = c.getLong(idIndex)
+                out += c.toMediaItem(itemId, ContentUris.withAppendedId(base, itemId), type, "is_favorite")
+            }
+        }
+    }
+
+    /** With "media management" access (Android 12+) the OS lets us trash/delete without its own prompt. */
+    private val canManageMedia: Boolean
+        get() = Build.VERSION.SDK_INT >= 31 && MediaStore.canManageMedia(context)
+
+    /** Trashed rows are hidden from plain URIs, so operations on them must opt in. */
+    private fun target(uri: Uri): Uri = if (Build.VERSION.SDK_INT >= 30) uri.buildUpon().appendQueryParameter("include_trashed", "1").build() else uri
+
     override suspend fun delete(items: List<MediaItem>): Int = withContext(Dispatchers.IO) {
         var n = 0
-        items.forEach { try { if (resolver.delete(it.uri, null, null) > 0) n++ } catch (_: Exception) { } }
+        items.forEach { try { if (resolver.delete(target(it.uri), null, null) > 0) n++ } catch (_: Exception) { } }
         n
     }
 
     override suspend fun requestDelete(items: List<MediaItem>): MediaOpResult = withContext(Dispatchers.IO) {
         if (items.isEmpty()) return@withContext MediaOpResult.Done(0)
         if (Build.VERSION.SDK_INT >= 30) {
+            if (canManageMedia) {
+                val n = delete(items)
+                if (n > 0) return@withContext MediaOpResult.Done(n)
+            }
             return@withContext try {
-                val pi = MediaStore.createDeleteRequest(resolver, items.map { it.uri })
+                val pi = MediaStore.createDeleteRequest(resolver, items.map { target(it.uri) })
                 MediaOpResult.NeedsConsent(pi.intentSender)
             } catch (e: Exception) {
                 MediaOpResult.Failed(e.message ?: "Unable to delete")
             }
         }
         MediaOpResult.Done(delete(items))
+    }
+
+    override suspend fun trash(items: List<MediaItem>, trashed: Boolean): MediaOpResult = withContext(Dispatchers.IO) {
+        if (items.isEmpty()) return@withContext MediaOpResult.Done(0)
+        if (Build.VERSION.SDK_INT < 30) {
+            // No OS Recycle bin before Android 11 — fall back to a permanent delete.
+            return@withContext if (trashed) MediaOpResult.Done(delete(items)) else MediaOpResult.Failed("Restore needs Android 11 or later")
+        }
+        if (canManageMedia) {
+            val values = ContentValues().apply { put("is_trashed", if (trashed) 1 else 0) }
+            var n = 0
+            items.forEach { try { if (resolver.update(target(it.uri), values, null, null) > 0) n++ } catch (_: Exception) { } }
+            if (n > 0) return@withContext MediaOpResult.Done(n)
+        }
+        try {
+            val pi = MediaStore.createTrashRequest(resolver, items.map { target(it.uri) }, trashed)
+            MediaOpResult.NeedsConsent(pi.intentSender)
+        } catch (e: Exception) {
+            MediaOpResult.Failed(e.message ?: if (trashed) "Unable to move to Recycle bin" else "Unable to restore")
+        }
     }
 
     override suspend fun setFavorite(items: List<MediaItem>, favorite: Boolean): MediaOpResult = withContext(Dispatchers.IO) {
@@ -191,7 +263,8 @@ class MediaStoreRepository @Inject constructor(@ApplicationContext private val c
         duration = getLongOrZero(MediaStore.Video.Media.DURATION), bucketId = getStringOrNull(MediaStore.MediaColumns.BUCKET_ID),
         bucketName = getStringOrNull(MediaStore.MediaColumns.BUCKET_DISPLAY_NAME), relativePath = getStringOrNull(MediaStore.MediaColumns.RELATIVE_PATH),
         mimeType = getStringOrNull(MediaStore.MediaColumns.MIME_TYPE),
-        isFavorite = favoriteCol != null && getIntOrZero(favoriteCol) == 1
+        isFavorite = favoriteCol != null && getIntOrZero(favoriteCol) == 1,
+        dateExpires = getLongOrZero("date_expires") * 1000
     )
 }
 

@@ -70,6 +70,6 @@ dependencies {
     implementation("io.coil-kt.coil3:coil-network-okhttp:3.3.0")
     implementation("io.coil-kt.coil3:coil-video:3.3.0")
     implementation("androidx.exifinterface:exifinterface:1.3.7")
-    implementation("androidx.paging:paging-runtime:3.5.1")
+    implementation("androidx.paging:paging-runtime-ktx:3.5.1")
     implementation("androidx.paging:paging-compose:3.5.1")
 }

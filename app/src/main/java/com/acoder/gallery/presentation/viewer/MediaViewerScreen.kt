@@ -2,19 +2,31 @@
 
 package com.acoder.gallery.presentation.viewer
 
-import android.app.Activity
 import androidx.activity.compose.BackHandler
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.IntentSenderRequest
-import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.calculatePan
 import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
@@ -22,141 +34,171 @@ import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Star
-import androidx.compose.material.icons.outlined.Star
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.material.icons.filled.StarBorder
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.navigation.NavHostController
 import coil3.compose.AsyncImage
 import com.acoder.gallery.core.sharing.MediaShareManager
+import com.acoder.gallery.core.util.dateLabel
 import com.acoder.gallery.core.util.dateTimeLabel
 import com.acoder.gallery.core.util.formatBytes
+import com.acoder.gallery.core.util.timeLabel
 import com.acoder.gallery.domain.model.MediaItem
+import com.acoder.gallery.presentation.common.ForceLightSystemBarIcons
+import com.acoder.gallery.presentation.common.GalleryDialog
 import com.acoder.gallery.presentation.home.HomeEvent
 import com.acoder.gallery.presentation.home.HomeViewModel
-import kotlinx.coroutines.launch
+import com.acoder.gallery.presentation.home.MediaAction
+import com.acoder.gallery.presentation.media.deleteMessage
+import com.acoder.gallery.presentation.media.deleteTitle
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MediaViewerScreen(vm: HomeViewModel, nav: NavHostController) {
     val context = LocalContext.current
-    val scope = rememberCoroutineScope()
     var items by remember { mutableStateOf(vm.viewerItems.value) }
     val start = vm.viewerIndex.value
     var showInfo by remember { mutableStateOf(false) }
+    var chrome by remember { mutableStateOf(true) }
     var deleteConfirm by remember { mutableStateOf(false) }
-    val snackbarHost = remember { SnackbarHostState() }
+    val busy by vm.busy.collectAsState()
 
     BackHandler { nav.popBackStack() }
+    ForceLightSystemBarIcons()
+
+    // Keep this screen in sync with what happens elsewhere (trash / favourite finished, even after an OS prompt).
+    LaunchedEffect(Unit) {
+        vm.events.collect { event ->
+            if (event is HomeEvent.ActionDone) {
+                when (event.action) {
+                    MediaAction.TRASH, MediaAction.DELETE_FOREVER -> items = items.filterNot { it.key in event.keys }
+                    MediaAction.FAVORITE -> items = items.map { if (it.key in event.keys) it.copy(isFavorite = event.flag) else it }
+                    MediaAction.RESTORE -> Unit
+                }
+            }
+        }
+    }
     if (items.isEmpty()) { LaunchedEffect(Unit) { nav.popBackStack() }; return }
 
     val pager = rememberPagerState(initialPage = start.coerceIn(0, items.lastIndex), pageCount = { items.size })
     val current = items.getOrNull(pager.currentPage) ?: items.first()
 
-    val favoriteLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) { result ->
-        if (result.resultCode == Activity.RESULT_OK) {
-            items = items.map { if (it.key == current.key) it.copy(isFavorite = !it.isFavorite) else it }
+    Box(Modifier.fillMaxSize().background(Color.Black)) {
+        HorizontalPager(pager, Modifier.fillMaxSize()) { page ->
+            items.getOrNull(page)?.let { ZoomableImage(it, onTap = { chrome = !chrome }) }
         }
-    }
-    val deleteLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) { result ->
-        if (result.resultCode == Activity.RESULT_OK) {
-            val remaining = items.filterNot { it.key == current.key }
-            items = remaining
-            if (remaining.isEmpty()) nav.popBackStack()
-        }
-    }
 
-    LaunchedEffect(Unit) {
-        vm.events.collect { event ->
-            when (event) {
-                is HomeEvent.ConfirmFavorite -> favoriteLauncher.launch(IntentSenderRequest.Builder(event.intentSender).build())
-                is HomeEvent.ConfirmDelete -> deleteLauncher.launch(IntentSenderRequest.Builder(event.intentSender).build())
-                is HomeEvent.Message -> scope.launch { snackbarHost.showSnackbar(event.text) }
+        // ---- top: back + "Today / 4:49 pm" + info ----
+        AnimatedVisibility(chrome, Modifier.align(Alignment.TopCenter), enter = fadeIn(), exit = fadeOut()) {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .background(Brush.verticalGradient(listOf(Color.Black.copy(alpha = 0.65f), Color.Transparent)))
+                    .statusBarsPadding()
+                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                IconButton({ nav.popBackStack() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back", tint = Color.White) }
+                Column(Modifier.weight(1f).padding(start = 8.dp)) {
+                    Text(current.displayDate.dateLabel(), color = Color.White, fontSize = 20.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.Medium)
+                    Text(
+                        "${current.displayDate.timeLabel().lowercase()}  ·  ${pager.currentPage + 1}/${items.size}",
+                        color = Color.White.copy(alpha = 0.75f), fontSize = 13.sp
+                    )
+                }
+                IconButton({ showInfo = !showInfo }) { Icon(Icons.Default.Info, "Info", tint = Color.White) }
             }
         }
-    }
 
-    Scaffold(
-        containerColor = Color.Black,
-        snackbarHost = { SnackbarHost(snackbarHost) }
-    ) { _ ->
-        Box(Modifier.fillMaxSize().background(Color.Black)) {
-            HorizontalPager(pager, Modifier.fillMaxSize()) { page ->
-                ZoomableImage(items[page])
-            }
-
-            TopAppBar(
-                title = { Text("${pager.currentPage + 1} / ${items.size}", color = Color.White) },
-                navigationIcon = { IconButton({ nav.popBackStack() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Close", tint = Color.White) } },
-                actions = {
-                    IconButton({ vm.toggleFavorite(listOf(current)) }) {
-                        Icon(
-                            if (current.isFavorite) Icons.Default.Star else Icons.Outlined.Star,
-                            "Favorite",
-                            tint = if (current.isFavorite) Color(0xFFFFC107) else Color.White
-                        )
-                    }
-                    IconButton({ showInfo = !showInfo }) { Icon(Icons.Default.Info, "Info", tint = Color.White) }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent)
-            )
-
-            if (showInfo) {
-                Surface(
-                    Modifier.align(Alignment.TopCenter).padding(top = 72.dp, start = 16.dp, end = 16.dp),
-                    color = Color.Black.copy(alpha = 0.7f),
-                    shape = MaterialTheme.shapes.medium
-                ) {
-                    Column(Modifier.padding(16.dp)) {
-                        Text(current.name, color = Color.White, style = MaterialTheme.typography.titleSmall)
-                        Text("${current.displayDate.dateTimeLabel()}", color = Color.White.copy(alpha = 0.85f), style = MaterialTheme.typography.bodySmall)
-                        Text("${current.size.formatBytes()} · ${current.width}\u00d7${current.height}", color = Color.White.copy(alpha = 0.85f), style = MaterialTheme.typography.bodySmall)
-                        current.bucketName?.let { Text(it, color = Color.White.copy(alpha = 0.85f), style = MaterialTheme.typography.bodySmall) }
-                    }
+        if (showInfo && chrome) {
+            Surface(
+                Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(top = 72.dp, start = 16.dp, end = 16.dp),
+                color = Color.Black.copy(alpha = 0.75f),
+                shape = RoundedCornerShape(20.dp)
+            ) {
+                Column(Modifier.padding(16.dp)) {
+                    Text(current.name, color = Color.White, style = MaterialTheme.typography.titleSmall)
+                    Text(current.displayDate.dateTimeLabel(), color = Color.White.copy(alpha = 0.85f), style = MaterialTheme.typography.bodySmall)
+                    Text("${current.size.formatBytes()} · ${current.width}×${current.height}", color = Color.White.copy(alpha = 0.85f), style = MaterialTheme.typography.bodySmall)
+                    current.bucketName?.let { Text(it, color = Color.White.copy(alpha = 0.85f), style = MaterialTheme.typography.bodySmall) }
                 }
             }
+        }
 
+        // ---- bottom: Share / Favourite / Edit / Delete ----
+        AnimatedVisibility(chrome, Modifier.align(Alignment.BottomCenter), enter = fadeIn(), exit = fadeOut()) {
             Row(
-                Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(vertical = 20.dp),
+                Modifier
+                    .fillMaxWidth()
+                    .background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.7f))))
+                    .navigationBarsPadding()
+                    .padding(top = 28.dp, bottom = 12.dp),
                 horizontalArrangement = Arrangement.SpaceEvenly
             ) {
-                ViewerAction("Edit", Icons.Default.Edit) { nav.navigate("editor/${android.net.Uri.encode(current.uri.toString())}") }
                 ViewerAction("Share", Icons.Default.Share) { MediaShareManager.share(context, listOf(current.uri), current.mimeType ?: "*/*") }
+                ViewerAction(
+                    if (current.isFavorite) "Favourited" else "Favourite",
+                    if (current.isFavorite) Icons.Default.Star else Icons.Default.StarBorder,
+                    tint = if (current.isFavorite) Color(0xFFFFC107) else Color.White
+                ) { vm.toggleFavorite(listOf(current)) }
+                ViewerAction("Edit", Icons.Default.Edit) { nav.navigate("editor/${android.net.Uri.encode(current.uri.toString())}") }
                 ViewerAction("Delete", Icons.Default.Delete) { deleteConfirm = true }
             }
         }
+
+        if (busy) LinearProgressIndicator(Modifier.fillMaxWidth().align(Alignment.TopCenter).statusBarsPadding())
     }
 
     if (deleteConfirm) {
-        AlertDialog(
-            onDismissRequest = { deleteConfirm = false },
-            title = { Text("Delete this item?") },
-            text = { Text("This can't be undone.") },
-            confirmButton = { TextButton({ deleteConfirm = false; vm.requestDelete(listOf(current)) }) { Text("Delete", color = MaterialTheme.colorScheme.error) } },
-            dismissButton = { TextButton({ deleteConfirm = false }) { Text("Cancel") } }
+        GalleryDialog(
+            title = deleteTitle(listOf(current)),
+            message = deleteMessage(listOf(current), vm.trashSupported),
+            confirmLabel = "Delete",
+            onDismiss = { deleteConfirm = false },
+            onConfirm = { deleteConfirm = false; vm.moveToTrash(listOf(current)) }
         )
     }
 }
 
 @Composable
-private fun ViewerAction(label: String, icon: androidx.compose.ui.graphics.vector.ImageVector, onClick: () -> Unit) {
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        FilledTonalIconButton(onClick) { Icon(icon, label) }
+private fun ViewerAction(label: String, icon: ImageVector, tint: Color = Color.White, onClick: () -> Unit) {
+    Column(
+        Modifier.clip(RoundedCornerShape(16.dp)).clickable(onClick = onClick).padding(horizontal = 16.dp, vertical = 6.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Icon(icon, label, Modifier.size(26.dp), tint = tint)
         Spacer(Modifier.height(4.dp))
-        Text(label, color = Color.White, style = MaterialTheme.typography.labelSmall)
+        Text(label, color = Color.White, fontSize = 12.sp)
     }
 }
 
 @Composable
-private fun ZoomableImage(item: MediaItem) {
+private fun ZoomableImage(item: MediaItem, onTap: () -> Unit) {
     var scale by remember(item.key) { mutableFloatStateOf(1f) }
     var offsetX by remember(item.key) { mutableFloatStateOf(0f) }
     var offsetY by remember(item.key) { mutableFloatStateOf(0f) }
@@ -207,7 +249,7 @@ private fun ZoomableImage(item: MediaItem) {
                 }
             }
             .pointerInput(item.key) {
-                detectTapGestures(onDoubleTap = {
+                detectTapGestures(onTap = { onTap() }, onDoubleTap = {
                     if (scale > 1f) { scale = 1f; offsetX = 0f; offsetY = 0f } else { scale = 2.5f }
                 })
             }

@@ -47,8 +47,12 @@ fun GalleryTheme(
         else -> LightColors
     }
 
+    // Dark mode uses a true-black canvas (OLED friendly, and how photo apps look) while keeping
+    // the dynamic-colour accents and raised surfaces.
+    val finalScheme = if (dark) colorScheme.copy(background = Color.Black, surface = Color.Black) else colorScheme
+
     MaterialTheme(
-        colorScheme = colorScheme,
+        colorScheme = finalScheme,
         typography = GalleryTypography,
         content = content
     )

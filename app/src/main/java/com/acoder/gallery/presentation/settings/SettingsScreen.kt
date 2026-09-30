@@ -2,7 +2,22 @@
 
 package com.acoder.gallery.presentation.settings
 
+import android.content.Intent
+import android.net.Uri
 import android.os.Build
+import android.provider.MediaStore
+import android.provider.Settings
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.platform.LocalContext
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.navigation.NavHostController
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -24,14 +39,30 @@ import com.acoder.gallery.presentation.home.HomeViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SettingsScreen(vm: HomeViewModel) {
+fun SettingsScreen(vm: HomeViewModel, nav: NavHostController) {
     val theme by vm.theme.collectAsState()
     val grid by vm.grid.collectAsState()
     val autoplay by vm.autoPlay.collectAsState()
     val dynamicColor by vm.dynamicColor.collectAsState()
     val sort by vm.sort.collectAsState()
 
-    Scaffold(topBar = { TopAppBar(title = { Text("Settings") }) }) { padding ->
+    val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
+    fun managesMedia() = Build.VERSION.SDK_INT >= 31 && MediaStore.canManageMedia(context)
+    var canManage by remember { mutableStateOf(managesMedia()) }
+    DisposableEffect(lifecycleOwner) {
+        // The user flips this in system settings, so re-read it whenever we come back.
+        val observer = LifecycleEventObserver { _, event -> if (event == Lifecycle.Event.ON_RESUME) canManage = managesMedia() }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
+    Scaffold(topBar = {
+        TopAppBar(
+            title = { Text("Settings") },
+            navigationIcon = { IconButton({ nav.popBackStack() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") } }
+        )
+    }) { padding ->
         Column(Modifier.padding(padding).fillMaxSize().verticalScroll(rememberScrollState())) {
             SectionHeader("Appearance")
             Row(
@@ -52,12 +83,37 @@ fun SettingsScreen(vm: HomeViewModel) {
                 Text("Grid size — $grid columns", style = MaterialTheme.typography.bodyLarge)
                 Slider(
                     value = grid.toFloat(),
-                    onValueChange = { vm.setGrid(it.toInt().coerceIn(2, 5)) },
-                    valueRange = 2f..5f,
-                    steps = 2
+                    onValueChange = { vm.setGrid(it.toInt().coerceIn(2, 6)) },
+                    valueRange = 2f..6f,
+                    steps = 3
                 )
             }
             SwitchRow("Autoplay videos", "Start playing as soon as a video opens", autoplay, vm::setAutoPlay)
+            HorizontalDivider(Modifier.padding(vertical = 8.dp))
+
+            SectionHeader("Recycle bin")
+            ListItem(
+                headlineContent = { Text("Open Recycle bin") },
+                supportingContent = { Text("Deleted photos and videos stay here for 30 days") },
+                leadingContent = { Icon(Icons.Default.Delete, null) },
+                modifier = Modifier.clickableListItem { nav.navigate("trash") }
+            )
+            if (Build.VERSION.SDK_INT >= 31) {
+                SwitchRow(
+                    "Delete without extra prompts",
+                    if (canManage) "Gallery can move photos to the Recycle bin without asking Android each time."
+                    else "Android asks you to approve every delete. Allow media management to skip that prompt.",
+                    canManage
+                ) {
+                    try {
+                        context.startActivity(
+                            Intent(Settings.ACTION_REQUEST_MANAGE_MEDIA).setData(Uri.parse("package:${context.packageName}"))
+                        )
+                    } catch (_: Exception) {
+                        vm.notify("Couldn't open the system setting")
+                    }
+                }
+            }
             HorizontalDivider(Modifier.padding(vertical = 8.dp))
 
             SectionHeader("Default sort order")

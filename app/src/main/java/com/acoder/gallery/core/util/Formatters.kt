@@ -38,3 +38,11 @@ fun Long.dateLabel(): String {
 fun Long.dateTimeLabel(): String =
     Instant.ofEpochMilli(this).atZone(ZoneId.systemDefault())
         .format(DateTimeFormatter.ofPattern("d MMM yyyy, h:mm a", Locale.getDefault()))
+
+fun Long.timeLabel(): String =
+    Instant.ofEpochMilli(this).atZone(ZoneId.systemDefault())
+        .format(DateTimeFormatter.ofPattern("h:mm a", Locale.getDefault()))
+
+/** Whole days left until [this] (an epoch-millis expiry), never below 0. */
+fun Long.daysUntil(now: Long = System.currentTimeMillis()): Int =
+    (((this - now) + 86_399_999L) / 86_400_000L).toInt().coerceAtLeast(0)

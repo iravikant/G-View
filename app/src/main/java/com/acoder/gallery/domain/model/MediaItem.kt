@@ -3,6 +3,9 @@ package com.acoder.gallery.domain.model
 import android.net.Uri
 
 enum class MediaType { IMAGE, VIDEO }
+enum class PdfPageSize(val label: String) { A4("A4"), LETTER("Letter"), ORIGINAL("Original") }
+enum class PdfQuality(val label: String, val maxDim: Int) { HIGH("High", 2400), MEDIUM("Medium", 1600), LOW("Low", 1000) }
+
 
 data class MediaItem(
     val id: Long, val uri: Uri, val name: String, val type: MediaType,
@@ -10,7 +13,9 @@ data class MediaItem(
     val size: Long, val width: Int, val height: Int, val duration: Long = 0L,
     val bucketId: String? = null, val bucketName: String? = null, val relativePath: String? = null,
     val mimeType: String? = null,
-    val isFavorite: Boolean = false
+    val isFavorite: Boolean = false,
+    /** Only set for Recycle-bin items: when the OS will purge them (epoch millis). */
+    val dateExpires: Long = 0L
 ) {
     val isVideo get() = type == MediaType.VIDEO
     val displayDate get() = if (dateTaken > 0) dateTaken else dateModified

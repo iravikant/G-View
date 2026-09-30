@@ -2,51 +2,127 @@
 
 package com.acoder.gallery.presentation.albums
 
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Collections
-import androidx.compose.material3.*
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.navigation.NavHostController
-import coil3.compose.AsyncImage
 import com.acoder.gallery.domain.model.Album
+import com.acoder.gallery.domain.usecase.MediaListBuilder
+import com.acoder.gallery.presentation.common.CircleButton
 import com.acoder.gallery.presentation.common.EmptyState
+import com.acoder.gallery.presentation.common.FloatingBarClearance
+import com.acoder.gallery.presentation.common.LargeTitle
+import com.acoder.gallery.presentation.common.MediaThumb
+import com.acoder.gallery.presentation.common.SectionTitle
 import com.acoder.gallery.presentation.home.HomeViewModel
 
-@OptIn(ExperimentalMaterial3Api::class)
+private val PinnedFolderNames = setOf("camera", "screenshots")
+
 @Composable
 fun AlbumsScreen(vm: HomeViewModel, nav: NavHostController) {
     val albums by vm.albums.collectAsState()
     val loading by vm.albumsLoading.collectAsState()
+    val trash by vm.trashItems.collectAsState()
+    var menuOpen by remember { mutableStateOf(false) }
 
-    Scaffold(topBar = { TopAppBar(title = { Text("Albums") }) }) { padding ->
-        Box(Modifier.padding(padding).fillMaxSize()) {
-            when {
-                loading && albums.isEmpty() -> Box(Modifier.fillMaxSize(), Alignment.Center) { CircularProgressIndicator() }
-                albums.isEmpty() -> EmptyState(Icons.Default.Collections, "No albums yet", "Albums appear here once your device has photos or videos.")
-                else -> LazyVerticalGrid(
-                    columns = GridCells.Adaptive(160.dp),
-                    contentPadding = PaddingValues(12.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    items(albums, key = { it.id }) { album ->
-                        AlbumCard(album) {
-                            vm.openAlbum(album.id, album.name)
-                            nav.navigate("media")
-                        }
-                    }
+    val pinned = albums.filter { it.id in MediaListBuilder.SMART_IDS || it.name.lowercase() in PinnedFolderNames }
+    val others = albums - pinned.toSet()
+    val bottom = FloatingBarClearance + WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
+
+    fun open(album: Album) {
+        vm.openAlbum(album.id, album.name)
+        nav.navigate("album")
+    }
+
+    Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
+        Row(
+            Modifier.fillMaxWidth().statusBarsPadding().padding(start = 20.dp, end = 16.dp, top = 12.dp, bottom = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            LargeTitle("Albums", Modifier.weight(1f))
+            Box {
+                CircleButton(Icons.Default.MoreVert, "More", { menuOpen = true })
+                DropdownMenu(menuOpen, { menuOpen = false }) {
+                    DropdownMenuItem(
+                        text = { Text("Recycle bin") },
+                        leadingIcon = { Icon(Icons.Default.Delete, null) },
+                        onClick = { menuOpen = false; nav.navigate("trash") }
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Settings") },
+                        leadingIcon = { Icon(Icons.Default.Settings, null) },
+                        onClick = { menuOpen = false; nav.navigate("settings") }
+                    )
+                }
+            }
+        }
+
+        when {
+            loading && albums.isEmpty() -> Box(Modifier.fillMaxSize(), Alignment.Center) { CircularProgressIndicator() }
+            albums.isEmpty() -> EmptyState(Icons.Default.Collections, "No albums yet", "Albums appear here once your device has photos or videos.")
+            else -> LazyVerticalGrid(
+                columns = GridCells.Fixed(3),
+                contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = bottom),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp),
+                modifier = Modifier.fillMaxSize()
+            ) {
+                if (pinned.isNotEmpty()) {
+                    item(key = "h-pinned", span = { GridItemSpan(maxLineSpan) }) { SectionTitle("Pinned") }
+                    items(pinned, key = { "a-${it.id}" }) { AlbumTile(it) { open(it) } }
+                }
+                if (others.isNotEmpty()) {
+                    item(key = "h-all", span = { GridItemSpan(maxLineSpan) }) { SectionTitle("All albums") }
+                    items(others, key = { "a-${it.id}" }) { AlbumTile(it) { open(it) } }
+                }
+                if (vm.trashSupported) {
+                    item(key = "h-utilities", span = { GridItemSpan(maxLineSpan) }) { SectionTitle("Utilities") }
+                    item(key = "trash") { RecycleBinTile(trash.size, trash.firstOrNull()?.uri) { nav.navigate("trash") } }
                 }
             }
         }
@@ -54,19 +130,54 @@ fun AlbumsScreen(vm: HomeViewModel, nav: NavHostController) {
 }
 
 @Composable
-private fun AlbumCard(album: Album, onClick: () -> Unit) {
-    Card(onClick = onClick) {
-        Column {
-            AsyncImage(
-                model = album.coverUri,
-                contentDescription = album.name,
-                modifier = Modifier.fillMaxWidth().aspectRatio(1.15f).clip(MaterialTheme.shapes.medium),
-                contentScale = ContentScale.Crop
-            )
-            Column(Modifier.padding(12.dp)) {
-                Text(album.name, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text("${album.count} item${if (album.count == 1) "" else "s"}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+private fun AlbumTile(album: Album, onClick: () -> Unit) {
+    Column(Modifier.clickable(onClick = onClick), horizontalAlignment = Alignment.CenterHorizontally) {
+        MediaThumb(
+            album.coverUri,
+            Modifier.fillMaxWidth().aspectRatio(1f).clip(RoundedCornerShape(24.dp)),
+            album.name
+        )
+        AlbumCaption(album.name, "%,d".format(album.count))
+    }
+}
+
+@Composable
+private fun RecycleBinTile(count: Int, cover: android.net.Uri?, onClick: () -> Unit) {
+    Column(Modifier.clickable(onClick = onClick), horizontalAlignment = Alignment.CenterHorizontally) {
+        Box(
+            Modifier.fillMaxWidth().aspectRatio(1f).clip(RoundedCornerShape(24.dp))
+                .background(MaterialTheme.colorScheme.surfaceContainerHigh),
+            contentAlignment = Alignment.Center
+        ) {
+            if (cover != null) MediaThumb(cover, Modifier.fillMaxSize())
+            Box(
+                Modifier.fillMaxSize().background(
+                    if (cover != null) androidx.compose.ui.graphics.Color.Black.copy(alpha = 0.45f)
+                    else androidx.compose.ui.graphics.Color.Transparent
+                ),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    Icons.Default.Delete, null, Modifier.size(40.dp),
+                    tint = if (cover != null) androidx.compose.ui.graphics.Color.White else MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
         }
+        AlbumCaption("Recycle bin", "%,d".format(count))
     }
+}
+
+@Composable
+private fun AlbumCaption(name: String, count: String) {
+    Spacer(Modifier.height(8.dp))
+    Text(
+        name,
+        fontSize = 16.sp,
+        fontWeight = FontWeight.Medium,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+        textAlign = TextAlign.Center,
+        color = MaterialTheme.colorScheme.onBackground
+    )
+    Text(count, fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
 }

@@ -27,7 +27,7 @@ class PreferencesRepository @Inject constructor(@ApplicationContext private val 
         runCatching { SortOrder.valueOf(it[sortKey] ?: SortOrder.NEWEST.name) }.getOrDefault(SortOrder.NEWEST)
     }
     val themeMode: Flow<String> = context.store.data.map { it[themeKey] ?: "SYSTEM" }
-    val gridSize: Flow<Int> = context.store.data.map { it[gridKey] ?: 3 }
+    val gridSize: Flow<Int> = context.store.data.map { it[gridKey] ?: 4 }
     val autoPlay: Flow<Boolean> = context.store.data.map { it[autoplayKey] ?: true }
     val dynamicColor: Flow<Boolean> = context.store.data.map { it[dynamicKey] ?: true }
 

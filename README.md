@@ -38,3 +38,14 @@ Use JDK 17. Kotlin 2.2.10 is officially compatible with Gradle through 8.14; for
 ## Building
 
 `./gradlew assembleDebug` -> `app/build/outputs/apk/debug/app-debug.apk`. A GitHub Actions workflow (`.github/workflows/build.yml`) builds the same APK on every push.
+
+## Recycle bin
+
+- **Delete** asks "Delete this photo?" and then moves the item to the OS Recycle bin (MediaStore trash, Android 11+). Items are purged by Android after 30 days. On Android 10 and below there is no OS bin, so the dialog says the delete is permanent.
+- **Recycle bin** (Albums -> Utilities, or the overflow menu) lists trashed items with a days-left badge and supports Restore, Delete permanently and Empty.
+- Android shows its own "Allow Gallery to move…" prompt for media the app didn't create. *Settings -> Delete without extra prompts* opens the system "Media management" switch that removes that second prompt.
+
+## UI
+
+Large titles, round header buttons, a floating **Photos | Albums** pill with a grid-size button on the left and sort/filter on the right, a tight date-grouped grid with video-length badges, a floating action pill while selecting, and rounded album covers with a Pinned section (Recent, Videos, Favourites, Camera, Screenshots).
+

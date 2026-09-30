@@ -2,22 +2,35 @@
 
 package com.acoder.gallery.presentation.media
 
-import android.app.Activity
 import android.content.Intent
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.animation.shrinkVertically
-import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -25,6 +38,7 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Check
@@ -32,57 +46,107 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DriveFileMove
 import androidx.compose.material.icons.filled.GridView
+import androidx.compose.material.icons.filled.MoreHoriz
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material.icons.filled.PictureAsPdf
-import androidx.compose.material.icons.filled.PlayCircle
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.SearchOff
 import androidx.compose.material.icons.filled.SelectAll
-import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Share
-import androidx.compose.material.icons.filled.Sort
 import androidx.compose.material.icons.filled.Star
-import androidx.compose.material.icons.outlined.Search
-import androidx.compose.material.icons.outlined.Star
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.material.icons.filled.StarBorder
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.Icon
+import androidx.compose.material3.InputChip
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.RadioButton
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.TextField
+import androidx.compose.material3.TextFieldDefaults
+import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.navigation.NavHostController
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.workDataOf
-import coil3.compose.AsyncImage
-import coil3.request.ImageRequest
-import coil3.video.videoFrameMillis
 import com.acoder.gallery.core.collage.CollageGenerator
 import com.acoder.gallery.core.media.MediaOperationWorker
-import com.acoder.gallery.core.pdf.PdfGenerator
 import com.acoder.gallery.core.sharing.ExportManager
 import com.acoder.gallery.core.sharing.MediaShareManager
 import com.acoder.gallery.core.util.formatDuration
-import com.acoder.gallery.domain.model.*
+import com.acoder.gallery.domain.model.GridRow
+import com.acoder.gallery.domain.model.MediaFilter
+import com.acoder.gallery.domain.model.MediaItem
+import com.acoder.gallery.domain.model.PdfPageSize
+import com.acoder.gallery.domain.model.PdfQuality
+import com.acoder.gallery.domain.model.SortOrder
+import com.acoder.gallery.presentation.common.BarAction
+import com.acoder.gallery.presentation.common.CircleButton
 import com.acoder.gallery.presentation.common.EmptyState
+import com.acoder.gallery.presentation.common.FloatingActionPill
+import com.acoder.gallery.presentation.common.FloatingBarClearance
+import com.acoder.gallery.presentation.common.GalleryDialog
+import com.acoder.gallery.presentation.common.LargeTitle
+import com.acoder.gallery.presentation.common.MediaBadge
+import com.acoder.gallery.presentation.common.MediaThumb
+import com.acoder.gallery.presentation.common.SelectionBadge
 import com.acoder.gallery.presentation.common.label
-import com.acoder.gallery.presentation.home.HomeEvent
 import com.acoder.gallery.presentation.home.HomeViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-@OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
+/** "Delete this photo?" / "Delete this video?" / "Delete 5 items?" */
+fun deleteTitle(items: List<MediaItem>): String = when {
+    items.size == 1 && items[0].isVideo -> "Delete this video?"
+    items.size == 1 -> "Delete this photo?"
+    items.all { it.isVideo } -> "Delete ${items.size} videos?"
+    items.none { it.isVideo } -> "Delete ${items.size} photos?"
+    else -> "Delete ${items.size} items?"
+}
+
+fun deleteMessage(items: List<MediaItem>, trashSupported: Boolean): String {
+    val what = when {
+        items.size == 1 && items[0].isVideo -> "This video"
+        items.size == 1 -> "This photo"
+        else -> "These ${items.size} items"
+    }
+    return if (trashSupported) {
+        "$what will be moved to the Recycle bin and deleted permanently after 30 days. You can restore ${if (items.size == 1) "it" else "them"} until then."
+    } else {
+        "$what will be deleted from this device. This can't be undone."
+    }
+}
+
 @Composable
-fun MediaScreen(vm: HomeViewModel, nav: NavHostController) {
+fun MediaScreen(vm: HomeViewModel, nav: NavHostController, isAlbum: Boolean = false) {
     val context = LocalContext.current
-    val scope = rememberCoroutineScope()
-    val snackbarHost = remember { SnackbarHostState() }
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
 
     val state by vm.mediaState.collectAsState()
     val selected by vm.selected.collectAsState()
@@ -91,33 +155,34 @@ fun MediaScreen(vm: HomeViewModel, nav: NavHostController) {
     val filter by vm.filter.collectAsState()
     val albumName by vm.albumName.collectAsState()
     val busy by vm.busy.collectAsState()
+    val sortSheetOpen by vm.sortSheetOpen.collectAsState()
 
     var searchOpen by remember { mutableStateOf(false) }
-    var sortOpen by remember { mutableStateOf(false) }
-    var moreMenuOpen by remember { mutableStateOf(false) }
+    var menuOpen by remember { mutableStateOf(false) }
     var pdfConfirm by remember { mutableStateOf(false) }
     var collageConfirm by remember { mutableStateOf(false) }
     var deleteConfirm by remember { mutableStateOf(false) }
-    var moveSheetOpen by remember { mutableStateOf(false) }
+    var moreOpen by remember { mutableStateOf(false) }
     var moveMode by remember { mutableStateOf("copy") }
-    var pendingDeleteKeys by remember { mutableStateOf<Set<String>>(emptySet()) }
 
     val snapshot = state.items
-    val selectedLoaded = remember(snapshot, selected) { if (selected.isEmpty()) emptyList() else snapshot.filter { it.key in selected } }
+    // In the order the user tapped them — that is the page order for PDFs and collages.
+    val selectedItems = remember(snapshot, selected) {
+        if (selected.isEmpty()) emptyList() else {
+            val byKey = snapshot.associateBy { it.key }
+            selected.mapNotNull { byKey[it] }
+        }
+    }
+    val selecting = selected.isNotEmpty()
 
-    val deleteLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) { result ->
-        if (result.resultCode == Activity.RESULT_OK) {
-            vm.onDeleteConfirmed(pendingDeleteKeys) // list updates itself via the MediaStore observer
-        }
-    }
-    val favoriteLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) { result ->
-        if (result.resultCode == Activity.RESULT_OK) {
-            vm.notify("Favorites updated")
-        }
-        vm.clearSelection()
-    }
+    BackHandler(enabled = selecting) { vm.clearSelection() }
+    BackHandler(enabled = !selecting && searchOpen) { searchOpen = false; vm.setQuery("") }
+
+    // A process restore can leave us on the album route with no album chosen.
+    LaunchedEffect(isAlbum, albumName) { if (isAlbum && albumName == null) nav.popBackStack() }
+
     val treeLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { tree ->
-        if (tree != null && selectedLoaded.isNotEmpty()) {
+        if (tree != null && selectedItems.isNotEmpty()) {
             try {
                 context.contentResolver.takePersistableUriPermission(
                     tree, Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
@@ -126,242 +191,264 @@ fun MediaScreen(vm: HomeViewModel, nav: NavHostController) {
             val data = workDataOf(
                 "mode" to moveMode,
                 "dest" to tree.toString(),
-                "uris" to selectedLoaded.map { it.uri.toString() }.toTypedArray()
+                "uris" to selectedItems.map { it.uri.toString() }.toTypedArray()
             )
             WorkManager.getInstance(context).enqueue(OneTimeWorkRequestBuilder<MediaOperationWorker>().setInputData(data).build())
-            vm.notify(if (moveMode == "move") "Moving ${selectedLoaded.size} item(s)…" else "Copying ${selectedLoaded.size} item(s)…")
+            vm.notify(if (moveMode == "move") "Moving ${selectedItems.size} item(s)…" else "Copying ${selectedItems.size} item(s)…")
             vm.clearSelection()
         }
     }
 
-    LaunchedEffect(Unit) {
-        vm.events.collect { event ->
-            when (event) {
-                is HomeEvent.Message -> scope.launch { snackbarHost.showSnackbar(event.text) }
-                is HomeEvent.ConfirmDelete -> {
-                    pendingDeleteKeys = event.pendingKeys
-                    deleteLauncher.launch(IntentSenderRequest.Builder(event.intentSender).build())
+    Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
+        Column(Modifier.fillMaxSize()) {
+            // ---------------- Header ----------------
+            if (selecting) {
+                Row(
+                    Modifier.fillMaxWidth().statusBarsPadding().padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    CircleButton(Icons.Default.Close, "Clear selection", { vm.clearSelection() })
+                    Text(
+                        "${selected.size} selected",
+                        Modifier.weight(1f).padding(horizontal = 16.dp),
+                        fontSize = 22.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    CircleButton(Icons.Default.SelectAll, "Select all", { vm.selectAll(snapshot.map { it.key }) })
                 }
-                is HomeEvent.ConfirmFavorite -> favoriteLauncher.launch(IntentSenderRequest.Builder(event.intentSender).build())
-            }
-        }
-    }
-
-    Scaffold(
-        snackbarHost = { SnackbarHost(snackbarHost) },
-        topBar = {
-            Column {
-                TopAppBar(
-                    title = {
-                        Text(
-                            when {
-                                selected.isNotEmpty() -> "${selected.size} selected"
-                                albumName != null -> albumName!!
-                                else -> "Gallery"
-                            }
-                        )
-                    },
-                    navigationIcon = {
-                        if (albumName != null && selected.isEmpty()) {
-                            IconButton({ vm.openAlbum(null, null) }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
-                        }
-                    },
-                    actions = {
-                        if (selected.isEmpty()) {
-                            IconButton({ searchOpen = !searchOpen }) { Icon(Icons.Outlined.Search, "Search") }
-                            IconButton({ sortOpen = true }) { Icon(Icons.Default.Sort, "Sort") }
-                            IconButton({ nav.navigate("settings") }) { Icon(Icons.Default.Settings, "Settings") }
-                            SortMenu(sortOpen, vm, onDismiss = { sortOpen = false })
-                        } else {
-                            IconButton({ vm.selectAll(snapshot.map { it.key }) }) { Icon(Icons.Default.SelectAll, "Select all loaded") }
-                            IconButton({ vm.clearSelection() }) { Icon(Icons.Default.Close, "Clear selection") }
+            } else {
+                Row(
+                    Modifier.fillMaxWidth().statusBarsPadding().padding(start = 20.dp, end = 16.dp, top = 12.dp, bottom = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    if (isAlbum) {
+                        CircleButton(Icons.AutoMirrored.Filled.ArrowBack, "Back", { nav.popBackStack() })
+                        Spacer(Modifier.width(12.dp))
+                    }
+                    LargeTitle(if (isAlbum) albumName.orEmpty() else "Photos", Modifier.weight(1f))
+                    CircleButton(Icons.Default.Search, "Search", { searchOpen = !searchOpen; if (!searchOpen) vm.setQuery("") })
+                    Spacer(Modifier.width(10.dp))
+                    Box {
+                        CircleButton(Icons.Default.MoreVert, "More", { menuOpen = true })
+                        DropdownMenu(menuOpen, { menuOpen = false }) {
+                            DropdownMenuItem(
+                                text = { Text("Select all") },
+                                leadingIcon = { Icon(Icons.Default.SelectAll, null) },
+                                onClick = { menuOpen = false; vm.selectAll(snapshot.map { it.key }) }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Recycle bin") },
+                                leadingIcon = { Icon(Icons.Default.Delete, null) },
+                                onClick = { menuOpen = false; nav.navigate("trash") }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Settings") },
+                                leadingIcon = { Icon(Icons.Default.GridView, null) },
+                                onClick = { menuOpen = false; nav.navigate("settings") }
+                            )
                         }
                     }
-                )
-                AnimatedVisibility(searchOpen && selected.isEmpty(), enter = expandVertically() + fadeIn(), exit = shrinkVertically() + fadeOut()) {
-                    OutlinedTextField(
+                }
+                if (searchOpen) {
+                    val focus = remember { FocusRequester() }
+                    LaunchedEffect(Unit) { focus.requestFocus() }
+                    TextField(
                         value = query,
                         onValueChange = vm::setQuery,
-                        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp).focusRequester(focus),
                         singleLine = true,
-                        shape = MaterialTheme.shapes.extraLarge,
+                        shape = CircleShape,
                         placeholder = { Text("Search photos and videos") },
-                        leadingIcon = { Icon(Icons.Outlined.Search, null) },
+                        leadingIcon = { Icon(Icons.Default.Search, null) },
                         trailingIcon = if (query.isNotEmpty()) {
-                            { IconButton({ vm.setQuery("") }) { Icon(Icons.Default.Close, "Clear") } }
-                        } else null
+                            { CircleButton(Icons.Default.Close, "Clear", { vm.setQuery("") }, size = 36.dp) }
+                        } else null,
+                        colors = TextFieldDefaults.colors(
+                            focusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                            unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                            focusedIndicatorColor = Color.Transparent,
+                            unfocusedIndicatorColor = Color.Transparent
+                        )
                     )
                 }
-                if (selected.isEmpty()) {
-                    FilterRow(filter, onSelect = vm::setFilter)
+                if (filter != MediaFilter.ALL) {
+                    Row(Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
+                        InputChip(
+                            selected = true,
+                            onClick = { vm.setFilter(MediaFilter.ALL) },
+                            label = { Text(filter.label()) },
+                            trailingIcon = { Icon(Icons.Default.Close, "Clear filter", Modifier.size(18.dp)) }
+                        )
+                    }
                 }
             }
-        },
-        bottomBar = {
-            AnimatedVisibility(selected.isNotEmpty(), enter = expandVertically() + fadeIn(), exit = shrinkVertically() + fadeOut()) {
-                SelectionActionBar(
-                    allFavorite = selectedLoaded.isNotEmpty() && selectedLoaded.all { it.isFavorite },
-                    onFavorite = { vm.toggleFavorite(selectedLoaded) },
-                    onShare = { MediaShareManager.share(context, selectedLoaded.map { it.uri }, selectedLoaded.firstOrNull()?.mimeType ?: "*/*") },
-                    onDelete = { deleteConfirm = true },
-                    onPdf = { pdfConfirm = true },
-                    onCollage = { collageConfirm = true },
-                    onMore = { moreMenuOpen = true }
+
+            // ---------------- Content ----------------
+            Box(Modifier.weight(1f).fillMaxWidth()) {
+                when {
+                    state.isLoading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
+                    state.items.isEmpty() && query.isNotBlank() ->
+                        EmptyState(Icons.Default.SearchOff, "No matches for \u201c$query\u201d", "Try a different search term.")
+                    state.items.isEmpty() ->
+                        EmptyState(Icons.Default.PhotoLibrary, "Nothing here yet", "Photos and videos you add will show up in this view.")
+                    else -> MediaGrid(state.rows, grid, selected, onTap = { item ->
+                        if (selecting) {
+                            vm.toggle(item.key)
+                        } else {
+                            vm.openViewer(state.items, state.items.indexOfFirst { it.key == item.key }.coerceAtLeast(0))
+                            nav.navigate(if (item.isVideo) "video" else "viewer")
+                        }
+                    }, onLong = { vm.toggle(it.key) })
+                }
+                if (busy) LinearProgressIndicator(Modifier.fillMaxWidth().align(Alignment.TopCenter))
+            }
+        }
+
+        // ---------------- Selection actions ----------------
+        AnimatedVisibility(
+            selecting,
+            Modifier.align(Alignment.BottomCenter),
+            enter = slideInVertically { it } + fadeIn(),
+            exit = slideOutVertically { it } + fadeOut()
+        ) {
+            val allFavorite = selectedItems.isNotEmpty() && selectedItems.all { it.isFavorite }
+            FloatingActionPill(
+                listOf(
+                    BarAction(Icons.Default.Share, "Share", {
+                        MediaShareManager.share(context, selectedItems.map { it.uri }, selectedItems.firstOrNull()?.mimeType ?: "*/*")
+                    }),
+                    BarAction(if (allFavorite) Icons.Default.Star else Icons.Default.StarBorder, "Favourite", { vm.toggleFavorite(selectedItems) }),
+                    BarAction(Icons.Default.PictureAsPdf, "PDF", { pdfConfirm = true }),
+                    BarAction(Icons.Default.Delete, "Delete", { deleteConfirm = true }),
+                    BarAction(Icons.Default.MoreHoriz, "More", { moreOpen = true })
                 )
-            }
-        }
-    ) { padding ->
-        Box(Modifier.padding(padding).fillMaxSize()) {
-            when {
-                state.isLoading ->
-                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
-                state.items.isEmpty() && query.isNotBlank() ->
-                    EmptyState(Icons.Default.SearchOff, "No matches for \u201c$query\u201d", "Try a different search term.")
-                state.items.isEmpty() ->
-                    EmptyState(Icons.Default.PhotoLibrary, "Nothing here yet", "Photos and videos you add will show up in this view.")
-                else -> MediaGrid(state.rows, grid, selected, onTap = { item ->
-                    if (selected.isNotEmpty()) {
-                        vm.toggle(item.key)
-                    } else {
-                        vm.openViewer(state.items, state.items.indexOfFirst { it.key == item.key }.coerceAtLeast(0))
-                        nav.navigate(if (item.isVideo) "video" else "viewer")
-                    }
-                }, onLong = { vm.toggle(it.key) })
-            }
-            if (busy) LinearProgressIndicator(Modifier.fillMaxWidth().align(Alignment.TopCenter))
+            )
         }
     }
 
-    if (pdfConfirm) ConfirmDialog(
-        "Create PDF?",
-        "${selectedLoaded.size} selected image(s) will be combined into one PDF and shared.",
-        onDismiss = { pdfConfirm = false }
-    ) {
-        pdfConfirm = false
-        val chosen = selectedLoaded.filter { !it.isVideo }
-        if (chosen.isEmpty()) {
-            vm.notify("Select at least one photo to make a PDF")
-        } else {
-            scope.launch(Dispatchers.IO) {
-                try {
-                    val file = PdfGenerator.generate(context, chosen.map { it.uri })
-                    val saved = ExportManager.saveToDownloads(context, file, "application/pdf", "Gallery_${System.currentTimeMillis()}.pdf")
-                    withContext(Dispatchers.Main) {
-                        if (saved != null) MediaShareManager.share(context, listOf(saved), "application/pdf")
-                        else vm.notify("Couldn't save the PDF")
+    // ---------------- Dialogs & sheets ----------------
+
+    if (deleteConfirm && selectedItems.isNotEmpty()) {
+        GalleryDialog(
+            title = deleteTitle(selectedItems),
+            message = deleteMessage(selectedItems, vm.trashSupported),
+            confirmLabel = "Delete",
+            onDismiss = { deleteConfirm = false },
+            onConfirm = { deleteConfirm = false; vm.moveToTrash(selectedItems) }
+        )
+    }
+
+    if (pdfConfirm) {
+        var pageSize by remember { mutableStateOf(PdfPageSize.A4) }
+        var pdfQuality by remember { mutableStateOf(PdfQuality.HIGH) }
+        AlertDialog(
+            onDismissRequest = { pdfConfirm = false },
+            title = { Text("Create PDF") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text("${selectedItems.count { !it.isVideo }} selected photo(s) will be combined into one PDF, saved to Downloads and shared.")
+                    Text("Page size", style = MaterialTheme.typography.titleSmall)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        PdfPageSize.entries.forEach { size ->
+                            FilterChip(selected = pageSize == size, onClick = { pageSize = size }, label = { Text(size.label) })
+                        }
                     }
-                } catch (e: Exception) {
-                    withContext(Dispatchers.Main) { vm.notify("PDF creation failed: ${e.message ?: "unknown error"}") }
+                    Text("Quality", style = MaterialTheme.typography.titleSmall)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        PdfQuality.entries.forEach { q ->
+                            FilterChip(selected = pdfQuality == q, onClick = { pdfQuality = q }, label = { Text(q.label) })
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    pdfConfirm = false
+                    val chosen = selectedItems.filter { !it.isVideo }
+                    if (chosen.isEmpty()) vm.notify("Select at least one photo to make a PDF")
+                    else vm.createPdf(context, chosen, pageSize, pdfQuality)
+                }) { Text("Create") }
+            },
+            dismissButton = { TextButton({ pdfConfirm = false }) { Text("Cancel") } }
+        )
+    }
+
+    if (collageConfirm) GalleryDialog(
+        title = "Create collage?",
+        message = "${selectedItems.count { !it.isVideo }} selected photo(s) will be arranged into a collage and shared.",
+        confirmLabel = "Create",
+        destructive = false,
+        onDismiss = { collageConfirm = false },
+        onConfirm = {
+            collageConfirm = false
+            val chosen = selectedItems.filter { !it.isVideo }
+            if (chosen.isEmpty()) {
+                vm.notify("Select at least one photo to make a collage")
+            } else {
+                scope.launch(Dispatchers.IO) {
+                    try {
+                        val file = CollageGenerator.generate(context, chosen.map { it.uri })
+                        val saved = ExportManager.saveToDownloads(context, file, "image/jpeg", "Collage_${System.currentTimeMillis()}.jpg")
+                        withContext(Dispatchers.Main) {
+                            if (saved != null) MediaShareManager.share(context, listOf(saved), "image/jpeg")
+                            else vm.notify("Couldn't save the collage")
+                        }
+                    } catch (e: Exception) {
+                        withContext(Dispatchers.Main) { vm.notify("Collage creation failed: ${e.message ?: "unknown error"}") }
+                    }
                 }
             }
+            vm.clearSelection()
         }
-        vm.clearSelection()
-    }
+    )
 
-    if (collageConfirm) ConfirmDialog(
-        "Create collage?",
-        "${selectedLoaded.size} selected image(s) will be arranged into a collage and shared.",
-        onDismiss = { collageConfirm = false }
-    ) {
-        collageConfirm = false
-        val chosen = selectedLoaded.filter { !it.isVideo }
-        if (chosen.isEmpty()) {
-            vm.notify("Select at least one photo to make a collage")
-        } else {
-            scope.launch(Dispatchers.IO) {
-                try {
-                    val file = CollageGenerator.generate(context, chosen.map { it.uri })
-                    val saved = ExportManager.saveToDownloads(context, file, "image/jpeg", "Collage_${System.currentTimeMillis()}.jpg")
-                    withContext(Dispatchers.Main) {
-                        if (saved != null) MediaShareManager.share(context, listOf(saved), "image/jpeg")
-                        else vm.notify("Couldn't save the collage")
-                    }
-                } catch (e: Exception) {
-                    withContext(Dispatchers.Main) { vm.notify("Collage creation failed: ${e.message ?: "unknown error"}") }
-                }
-            }
-        }
-        vm.clearSelection()
-    }
-
-    if (deleteConfirm) ConfirmDialog(
-        "Delete ${selectedLoaded.size} item(s)?",
-        "This can't be undone. Android may ask you to confirm once more.",
-        destructive = true,
-        onDismiss = { deleteConfirm = false }
-    ) {
-        deleteConfirm = false
-        vm.requestDelete(selectedLoaded)
-    }
-
-    if (moreMenuOpen) AlertDialog(
-        onDismissRequest = { moreMenuOpen = false },
-        title = { Text("Manage ${selectedLoaded.size} item(s)") },
+    if (moreOpen) AlertDialog(
+        onDismissRequest = { moreOpen = false },
+        title = { Text("${selectedItems.size} selected") },
         text = {
             Column {
-                TextButton({ moveMode = "copy"; moreMenuOpen = false; treeLauncher.launch(null) }, Modifier.fillMaxWidth()) {
-                    Icon(Icons.Default.DriveFileMove, null); Spacer(Modifier.width(8.dp)); Text("Copy to folder")
+                TextButton({ moreOpen = false; collageConfirm = true }, Modifier.fillMaxWidth()) {
+                    Icon(Icons.Default.GridView, null); Spacer(Modifier.width(8.dp)); Text("Create collage", Modifier.weight(1f))
                 }
-                TextButton({ moveMode = "move"; moreMenuOpen = false; treeLauncher.launch(null) }, Modifier.fillMaxWidth()) {
-                    Icon(Icons.Default.DriveFileMove, null); Spacer(Modifier.width(8.dp)); Text("Move to folder")
+                TextButton({ moveMode = "copy"; moreOpen = false; treeLauncher.launch(null) }, Modifier.fillMaxWidth()) {
+                    Icon(Icons.Default.DriveFileMove, null); Spacer(Modifier.width(8.dp)); Text("Copy to folder", Modifier.weight(1f))
+                }
+                TextButton({ moveMode = "move"; moreOpen = false; treeLauncher.launch(null) }, Modifier.fillMaxWidth()) {
+                    Icon(Icons.Default.DriveFileMove, null); Spacer(Modifier.width(8.dp)); Text("Move to folder", Modifier.weight(1f))
                 }
             }
         },
-        confirmButton = { TextButton({ moreMenuOpen = false }) { Text("Close") } }
+        confirmButton = { TextButton({ moreOpen = false }) { Text("Close") } }
     )
+
+    if (sortSheetOpen) SortFilterSheet(vm, onDismiss = { vm.sortSheetOpen.value = false })
 }
 
 @Composable
-private fun FilterRow(current: MediaFilter, onSelect: (MediaFilter) -> Unit) {
-    Row(
-        Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp, vertical = 4.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-        MediaFilter.values().forEach { filter ->
-            FilterChip(
-                selected = current == filter,
-                onClick = { onSelect(filter) },
-                label = { Text(filter.label()) }
-            )
-        }
-    }
-}
-
-@Composable
-private fun SortMenu(expanded: Boolean, vm: HomeViewModel, onDismiss: () -> Unit) {
-    val current by vm.sort.collectAsState()
-    DropdownMenu(expanded = expanded, onDismissRequest = onDismiss) {
-        SortOrder.values().forEach { option ->
-            DropdownMenuItem(
-                text = { Text(option.label()) },
-                leadingIcon = { if (option == current) Icon(Icons.Default.Check, null) else Spacer(Modifier.size(24.dp)) },
-                onClick = { vm.setSort(option); onDismiss() }
-            )
-        }
-    }
-}
-
-@Composable
-private fun SelectionActionBar(
-    allFavorite: Boolean,
-    onFavorite: () -> Unit,
-    onShare: () -> Unit,
-    onDelete: () -> Unit,
-    onPdf: () -> Unit,
-    onCollage: () -> Unit,
-    onMore: () -> Unit
-) {
-    Surface(tonalElevation = 3.dp) {
-        Row(
-            Modifier.fillMaxWidth().padding(vertical = 8.dp),
-            horizontalArrangement = Arrangement.SpaceEvenly
-        ) {
-            ActionIcon(if (allFavorite) "Unfavorite" else "Favorite", if (allFavorite) Icons.Default.Star else Icons.Outlined.Star, onFavorite)
-            ActionIcon("Share", Icons.Default.Share, onShare)
-            ActionIcon("PDF", Icons.Default.PictureAsPdf, onPdf)
-            ActionIcon("Collage", Icons.Default.GridView, onCollage)
-            ActionIcon("Delete", Icons.Default.Delete, onDelete)
-            ActionIcon("More", Icons.Default.MoreVert, onMore)
+private fun SortFilterSheet(vm: HomeViewModel, onDismiss: () -> Unit) {
+    val sort by vm.sort.collectAsState()
+    val filter by vm.filter.collectAsState()
+    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
+        Column(Modifier.verticalScroll(rememberScrollState()).padding(bottom = 24.dp)) {
+            Text("Show", Modifier.padding(horizontal = 24.dp, vertical = 8.dp), fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
+            Row(
+                Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 20.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                MediaFilter.entries.forEach { option ->
+                    FilterChip(selected = filter == option, onClick = { vm.setFilter(option) }, label = { Text(option.label()) })
+                }
+            }
+            Text("Sort by", Modifier.padding(start = 24.dp, end = 24.dp, top = 20.dp, bottom = 4.dp), fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
+            SortOrder.entries.forEach { option ->
+                Row(
+                    Modifier.fillMaxWidth().combinedClickable(onClick = { vm.setSort(option) }).padding(horizontal = 16.dp, vertical = 2.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    RadioButton(selected = sort == option, onClick = { vm.setSort(option) })
+                    Text(option.label(), fontSize = 16.sp)
+                }
+            }
         }
     }
 }
@@ -377,10 +464,13 @@ private fun MediaGrid(
     // Stable keys keep the scroll position anchored when the list updates underneath the user.
     val gridState = rememberLazyGridState()
     val selectionActive = selected.isNotEmpty()
+    val bottom = FloatingBarClearance + WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
     LazyVerticalGrid(
         state = gridState,
-        columns = GridCells.Fixed(columns.coerceIn(2, 5)),
-        contentPadding = PaddingValues(2.dp),
+        columns = GridCells.Fixed(columns.coerceIn(2, 6)),
+        contentPadding = PaddingValues(bottom = bottom),
+        horizontalArrangement = Arrangement.spacedBy(2.dp),
+        verticalArrangement = Arrangement.spacedBy(2.dp),
         modifier = Modifier.fillMaxSize()
     ) {
         items(
@@ -392,9 +482,10 @@ private fun MediaGrid(
             when (row) {
                 is GridRow.Header -> Text(
                     row.label,
-                    style = MaterialTheme.typography.titleSmall,
+                    Modifier.padding(start = 20.dp, end = 20.dp, top = 22.dp, bottom = 10.dp),
+                    fontSize = 20.sp,
                     fontWeight = FontWeight.SemiBold,
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)
+                    color = MaterialTheme.colorScheme.onBackground
                 )
                 is GridRow.Media -> MediaTile(
                     item = row.item,
@@ -408,78 +499,27 @@ private fun MediaGrid(
     }
 }
 
-@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun MediaTile(item: MediaItem, selectionActive: Boolean, isSelected: Boolean, onTap: () -> Unit, onLong: () -> Unit) {
     Box(
         Modifier
-            .padding(1.dp)
             .aspectRatio(1f)
             .combinedClickable(onClick = onTap, onLongClick = onLong)
     ) {
-        AsyncImage(
-            model = ImageRequest.Builder(LocalContext.current).data(item.uri).videoFrameMillis(1000).build(),
-            contentDescription = item.name,
-            contentScale = ContentScale.Crop,
-            modifier = Modifier.fillMaxSize()
-        )
+        MediaThumb(item.uri, Modifier.fillMaxSize(), item.name)
         if (item.isVideo) {
-            Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = if (selectionActive && isSelected) 0.35f else 0f)))
-            Icon(
-                Icons.Default.PlayCircle, null,
-                Modifier.align(Alignment.Center).size(28.dp),
-                tint = Color.White.copy(alpha = 0.92f)
-            )
             if (item.duration > 0) {
-                Text(
-                    item.duration.formatDuration(),
-                    color = Color.White,
-                    style = MaterialTheme.typography.labelSmall,
-                    modifier = Modifier.align(Alignment.BottomEnd).padding(4.dp)
-                        .background(Color.Black.copy(alpha = 0.55f), MaterialTheme.shapes.extraSmall)
-                        .padding(horizontal = 4.dp, vertical = 1.dp)
-                )
+                MediaBadge(item.duration.formatDuration(), Modifier.align(Alignment.BottomStart).padding(6.dp))
+            } else {
+                Icon(Icons.Default.PlayArrow, null, Modifier.align(Alignment.BottomStart).padding(6.dp).size(20.dp), tint = Color.White)
             }
         }
         if (item.isFavorite) {
-            Icon(
-                Icons.Default.Star, "Favorite",
-                Modifier.align(Alignment.TopStart).padding(4.dp).size(16.dp),
-                tint = Color.White
-            )
+            Icon(Icons.Default.Star, "Favourite", Modifier.align(Alignment.BottomEnd).padding(6.dp).size(16.dp), tint = Color.White)
         }
         if (selectionActive) {
-            Box(Modifier.fillMaxSize().background(if (isSelected) Color.Black.copy(alpha = 0.25f) else Color.Transparent))
-            Surface(
-                Modifier.align(Alignment.TopEnd).padding(5.dp).size(20.dp).clip(CircleShape),
-                color = if (isSelected) MaterialTheme.colorScheme.primary else Color.Black.copy(alpha = 0.35f),
-                border = if (!isSelected) BorderStroke(1.dp, Color.White.copy(alpha = 0.85f)) else null
-            ) {
-                if (isSelected) Icon(Icons.Default.Check, null, Modifier.padding(2.dp), tint = MaterialTheme.colorScheme.onPrimary)
-            }
+            if (isSelected) Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.3f)))
+            SelectionBadge(isSelected, Modifier.align(Alignment.TopEnd).padding(6.dp))
         }
     }
-}
-
-@Composable
-private fun ActionIcon(label: String, icon: ImageVector, onClick: () -> Unit) {
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        IconButton(onClick) { Icon(icon, label) }
-        Text(label, style = MaterialTheme.typography.labelSmall)
-    }
-}
-
-@Composable
-private fun ConfirmDialog(title: String, text: String, destructive: Boolean = false, onDismiss: () -> Unit, onConfirm: () -> Unit) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(title) },
-        text = { Text(text) },
-        confirmButton = {
-            TextButton(onConfirm) {
-                Text("Confirm", color = if (destructive) MaterialTheme.colorScheme.error else Color.Unspecified)
-            }
-        },
-        dismissButton = { TextButton(onDismiss) { Text("Cancel") } }
-    )
 }
