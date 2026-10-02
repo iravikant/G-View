@@ -93,6 +93,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -123,8 +124,14 @@ import com.acoder.gallery.core.util.dateLabel
 import com.acoder.gallery.core.util.dateTimeLabel
 import com.acoder.gallery.core.util.formatBytes
 import com.acoder.gallery.core.util.formatDuration
+import com.acoder.gallery.core.util.mediaSharedBounds
 import com.acoder.gallery.core.util.timeLabel
 import com.acoder.gallery.domain.model.MediaItem
+import com.acoder.gallery.presentation.viewer.MediaThumbnailStrip
+import com.acoder.gallery.presentation.viewer.edgeBleedGradient
+import com.acoder.gallery.presentation.viewer.PlaybackRequest
+import com.acoder.gallery.presentation.viewer.isVideoMedia
+import com.acoder.gallery.presentation.viewer.openMediaFromViewer
 import com.acoder.gallery.presentation.common.ForceLightSystemBarIcons
 import com.acoder.gallery.presentation.common.GalleryDialog
 import com.acoder.gallery.presentation.home.HomeEvent
@@ -132,10 +139,6 @@ import com.acoder.gallery.presentation.home.HomeViewModel
 import com.acoder.gallery.presentation.home.MediaAction
 import com.acoder.gallery.presentation.media.deleteMessage
 import com.acoder.gallery.presentation.media.deleteTitle
-import com.acoder.gallery.presentation.viewer.MediaThumbnailStrip
-import com.acoder.gallery.presentation.viewer.PlaybackRequest
-import com.acoder.gallery.presentation.viewer.isVideoMedia
-import com.acoder.gallery.presentation.viewer.openMediaFromViewer
 import kotlinx.coroutines.delay
 import kotlin.math.abs
 import kotlin.math.roundToInt
@@ -202,7 +205,6 @@ fun VideoPlayerScreen(vm: HomeViewModel, nav: NavHostController) {
         }
     }
     DisposableEffect(player) { onDispose { player.release() } }
-    BackHandler { nav.popBackStack() }
     ForceLightSystemBarIcons()
 
     // ---- state ----
@@ -216,6 +218,9 @@ fun VideoPlayerScreen(vm: HomeViewModel, nav: NavHostController) {
     var speed by remember { mutableFloatStateOf(1f) }
     var boosting by remember { mutableStateOf(false) }
     var chrome by remember { mutableStateOf(true) }
+    var closing by remember { mutableStateOf(false) }
+    var firstFrame by remember(current.key) { mutableStateOf(false) }
+    BackHandler { closing = true }
     var aspectIdx by rememberSaveable { mutableStateOf(0) }
     val aspect = AspectMode.values()[aspectIdx]
     var interaction by remember { mutableIntStateOf(0) }
@@ -286,6 +291,7 @@ fun VideoPlayerScreen(vm: HomeViewModel, nav: NavHostController) {
     DisposableEffect(player) {
         val listener = object : Player.Listener {
             override fun onIsPlayingChanged(playing: Boolean) { isPlaying = playing }
+            override fun onRenderedFirstFrame() { firstFrame = true }
             override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) { resumePlay = playWhenReady }
             override fun onPlaybackStateChanged(state: Int) {
                 ended = state == Player.STATE_ENDED
@@ -332,6 +338,10 @@ fun VideoPlayerScreen(vm: HomeViewModel, nav: NavHostController) {
         if (ended) { player.seekTo(0); player.play() }
         else if (player.isPlaying) player.pause() else player.play()
     }
+    // Close = show the poster for a frame (a live video surface can't morph back into the tile), then pop.
+    LaunchedEffect(closing) {
+        if (closing) { withFrameNanos { }; withFrameNanos { }; nav.popBackStack() }
+    }
     fun cycleAspect() {
         val modes = AspectMode.values()
         aspectIdx = (aspectIdx + 1) % modes.size
@@ -354,7 +364,7 @@ fun VideoPlayerScreen(vm: HomeViewModel, nav: NavHostController) {
     }
 
     Box(Modifier.fillMaxSize().background(Color.Black)) {
-        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        Box(Modifier.fillMaxSize().mediaSharedBounds(current.key), contentAlignment = Alignment.Center) {
             AndroidView(
                 factory = { PlayerView(it).apply { useController = false } },
                 update = {
@@ -364,6 +374,19 @@ fun VideoPlayerScreen(vm: HomeViewModel, nav: NavHostController) {
                 },
                 modifier = aspect.ratio?.let { r -> Modifier.aspectRatio(r) } ?: Modifier.fillMaxSize()
             )
+            // poster = the tile's picture; it is what flies in / out, then fades once the first frame is drawn
+            androidx.compose.animation.AnimatedVisibility(
+                visible = !firstFrame || closing,
+                enter = androidx.compose.animation.EnterTransition.None,
+                exit = androidx.compose.animation.fadeOut(androidx.compose.animation.core.tween(200))
+            ) {
+                AsyncImage(
+                    model = current.uri,
+                    contentDescription = null,
+                    contentScale = androidx.compose.ui.layout.ContentScale.Fit,
+                    modifier = Modifier.fillMaxSize()
+                )
+            }
         }
 
         // ---------- gesture layer ----------
@@ -531,13 +554,13 @@ fun VideoPlayerScreen(vm: HomeViewModel, nav: NavHostController) {
             Row(
                 Modifier
                     .fillMaxWidth()
-                    .background(Brush.verticalGradient(listOf(Color.Black.copy(alpha = 0.7f), Color.Transparent)))
+                    .edgeBleedGradient(listOf(Color.Black.copy(alpha = 0.7f), Color.Transparent), top = true)
                     .statusBarsPadding()
                     .displayCutoutPadding()
                     .padding(horizontal = 8.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                IconButton({ nav.popBackStack() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back", tint = Color.White) }
+                IconButton({ closing = true }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back", tint = Color.White) }
                 Column(Modifier.weight(1f).padding(start = 4.dp)) {
                     Text(
                         current.bucketName ?: current.name,
@@ -598,7 +621,7 @@ fun VideoPlayerScreen(vm: HomeViewModel, nav: NavHostController) {
             Column(
                 Modifier
                     .fillMaxWidth()
-                    .background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.85f))))
+                    .edgeBleedGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.85f)), top = false)
                     .navigationBarsPadding()
                     .displayCutoutPadding()
                     .padding(top = 28.dp, bottom = 12.dp)

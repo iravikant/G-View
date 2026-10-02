@@ -101,6 +101,7 @@ import com.acoder.gallery.core.sharing.MediaShareManager
 import com.acoder.gallery.core.util.dateLabel
 import com.acoder.gallery.core.util.dateTimeLabel
 import com.acoder.gallery.core.util.formatBytes
+import com.acoder.gallery.core.util.mediaSharedBounds
 import com.acoder.gallery.core.util.timeLabel
 import com.acoder.gallery.domain.model.MediaItem
 import com.acoder.gallery.presentation.common.ForceLightSystemBarIcons
@@ -173,8 +174,7 @@ fun MediaViewerScreen(vm: HomeViewModel, nav: NavHostController) {
                         onDragEnd = {
                             scope.launch {
                                 if (abs(dragY.value) > screenH * 0.15f) {
-                                    val dir = if (dragY.value >= 0f) 1f else -1f
-                                    dragY.animateTo(dir * screenH, tween(180))
+                                    // the shared-element transition flies the photo back into its tile
                                     nav.popBackStack()
                                 } else {
                                     dragY.animateTo(0f, spring(dampingRatio = 0.8f, stiffness = 500f))
@@ -206,15 +206,19 @@ fun MediaViewerScreen(vm: HomeViewModel, nav: NavHostController) {
                     }
                 ) {
                     items.getOrNull(page)?.let { item ->
+                        // only the visible page shares bounds with its grid tile
+                        val sharedMod = if (page == pager.currentPage) Modifier.mediaSharedBounds(item.key) else Modifier
                         if (item.isVideoMedia) {
                             VideoPreviewPage(
                                 item,
+                                modifier = sharedMod,
                                 onTap = { chrome = !chrome },
                                 onPlay = { openMediaFromViewer(vm, nav, items, page) }
                             )
                         } else {
                             ZoomableImage(
                                 item,
+                                modifier = sharedMod,
                                 onTap = { chrome = !chrome },
                                 onZoomChanged = { z -> if (page == pager.currentPage) zoomed = z }
                             )
@@ -233,7 +237,7 @@ fun MediaViewerScreen(vm: HomeViewModel, nav: NavHostController) {
             Row(
                 Modifier
                     .fillMaxWidth()
-                    .background(Brush.verticalGradient(listOf(Color.Black.copy(alpha = 0.7f), Color.Transparent)))
+                    .edgeBleedGradient(listOf(Color.Black.copy(alpha = 0.7f), Color.Transparent), top = true)
                     .statusBarsPadding()
                     .padding(horizontal = 8.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically
@@ -242,7 +246,7 @@ fun MediaViewerScreen(vm: HomeViewModel, nav: NavHostController) {
                 Column(Modifier.weight(1f).padding(start = 4.dp)) {
                     Text(
                         current.bucketName ?: current.displayDate.dateLabel(),
-                        color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, maxLines = 1
+                        color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.SemiBold, maxLines = 1
                     )
                     Text(
                         "${current.displayDate.dateLabel()} at ${current.displayDate.timeLabel().lowercase()}",
@@ -271,7 +275,7 @@ fun MediaViewerScreen(vm: HomeViewModel, nav: NavHostController) {
             Column(
                 Modifier
                     .fillMaxWidth()
-                    .background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.85f))))
+                    .edgeBleedGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.85f)), top = false)
                     .navigationBarsPadding()
                     .padding(top = 24.dp, bottom = 12.dp)
             ) {
@@ -349,8 +353,8 @@ private fun CircleAction(icon: ImageVector, label: String, onClick: () -> Unit) 
 // ============================ Video page inside the photo pager ============================
 
 @Composable
-private fun VideoPreviewPage(item: MediaItem, onTap: () -> Unit, onPlay: () -> Unit) {
-    Box(Modifier.fillMaxSize().pointerInput(item.key) { detectTapGestures(onTap = { onTap() }) }) {
+private fun VideoPreviewPage(item: MediaItem, modifier: Modifier = Modifier, onTap: () -> Unit, onPlay: () -> Unit) {
+    Box(modifier.fillMaxSize().pointerInput(item.key) { detectTapGestures(onTap = { onTap() }) }) {
         AsyncImage(
             model = item.uri,
             contentDescription = item.name,
@@ -491,13 +495,13 @@ private fun clampOffset(o: Offset, scale: Float, size: IntSize): Offset {
 }
 
 @Composable
-private fun ZoomableImage(item: MediaItem, onTap: () -> Unit, onZoomChanged: (Boolean) -> Unit = {}) {
+private fun ZoomableImage(item: MediaItem, modifier: Modifier = Modifier, onTap: () -> Unit, onZoomChanged: (Boolean) -> Unit = {}) {
     var scale by remember(item.key) { mutableFloatStateOf(1f) }
     var offset by remember(item.key) { mutableStateOf(Offset.Zero) }
     LaunchedEffect(item.key) { snapshotFlow { scale > 1.02f }.collect { onZoomChanged(it) } }
 
     Box(
-        Modifier
+        modifier
             .fillMaxSize()
             // NOTE: pointerInput is placed BEFORE graphicsLayer on purpose. Modifiers placed after
             // a graphicsLayer receive coordinates in the already-scaled space, which divided every

@@ -14,6 +14,10 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.calculateZoom
+import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -69,7 +73,6 @@ import androidx.compose.material3.InputChip
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -79,16 +82,25 @@ import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -96,10 +108,7 @@ import androidx.navigation.NavHostController
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.workDataOf
-import com.acoder.gallery.core.collage.CollageConfig
-import com.acoder.gallery.core.collage.CollageFrame
 import com.acoder.gallery.core.collage.CollageGenerator
-import com.acoder.gallery.core.collage.CollageLayout
 import com.acoder.gallery.core.collage.CollagePreviewDialog
 import com.acoder.gallery.core.media.MediaOperationWorker
 import com.acoder.gallery.core.sharing.ExportManager
@@ -124,6 +133,7 @@ import com.acoder.gallery.presentation.common.SelectionBadge
 import com.acoder.gallery.presentation.common.label
 import com.acoder.gallery.presentation.home.HomeViewModel
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -234,26 +244,30 @@ fun MediaScreen(vm: HomeViewModel, nav: NavHostController, isAlbum: Boolean = fa
                     Text(
                         if (isAlbum) albumName.orEmpty() else "Photos",
                         modifier = Modifier.weight(1f),
-                        fontSize = 28.sp,
+                        fontSize = 26.sp,
                         fontWeight = FontWeight.SemiBold,
                         color = MaterialTheme.colorScheme.onBackground
                     )
-                    // when line exceed more than 1  fontSize will be changed to 24sp
-                   /* val title = if (isAlbum) albumName.orEmpty() else "Photos"
-                   // Reset whenever the title changes
-                    var fontSize by remember(title) { mutableStateOf(28.sp) }
-                    Text(
-                        text = title,
-                        modifier = Modifier.weight(1f),
-                        fontSize = fontSize,
-                        fontWeight = FontWeight.SemiBold,
-                        color = MaterialTheme.colorScheme.onBackground,
-                        onTextLayout = { result ->
-                            if (result.lineCount > 1 && fontSize != 24.sp) {
-                                fontSize = 24.sp
-                            }
-                        }
-                    )*/
+
+                   /*********************************************************************************************
+                    *************** when line exceed more than 1  fontSize will be changed to 24sp  *************
+                    *********************************************************************************************/
+
+                    /* val title = if (isAlbum) albumName.orEmpty() else "Photos"
+                    // Reset whenever the title changes
+                     var fontSize by remember(title) { mutableStateOf(28.sp) }
+                     Text(
+                         text = title,
+                         modifier = Modifier.weight(1f),
+                         fontSize = fontSize,
+                         fontWeight = FontWeight.SemiBold,
+                         color = MaterialTheme.colorScheme.onBackground,
+                         onTextLayout = { result ->
+                             if (result.lineCount > 1 && fontSize != 24.sp) {
+                                 fontSize = 24.sp
+                             }
+                         }
+                     )*/
                     CircleButton(Icons.Default.Search, "Search", { searchOpen = !searchOpen; if (!searchOpen) vm.setQuery("") })
                     Spacer(Modifier.width(10.dp))
                     Box {
@@ -319,14 +333,23 @@ fun MediaScreen(vm: HomeViewModel, nav: NavHostController, isAlbum: Boolean = fa
                         EmptyState(Icons.Default.SearchOff, "No matches for \u201c$query\u201d", "Try a different search term.")
                     state.items.isEmpty() ->
                         EmptyState(Icons.Default.PhotoLibrary, "Nothing here yet", "Photos and videos you add will show up in this view.")
-                    else -> MediaGrid(state.rows, grid, selected, onTap = { item ->
-                        if (selecting) {
-                            vm.toggle(item.key)
-                        } else {
-                            vm.openViewer(state.items, state.items.indexOfFirst { it.key == item.key }.coerceAtLeast(0))
-                            nav.navigate(if (item.isVideo) "video" else "viewer")
-                        }
-                    }, onLong = { vm.toggle(it.key) })
+                    else -> MediaGrid(
+                        rows = state.rows,
+                        columns = grid,
+                        selected = selected,
+                        onTap = { item ->
+                            if (selecting) {
+                                vm.toggle(item.key)
+                            } else {
+                                vm.openViewer(state.items, state.items.indexOfFirst { it.key == item.key }.coerceAtLeast(0))
+                                nav.navigate(if (item.isVideo) "video" else "viewer")
+                            }
+                        },
+                        // Used by long-press + drag multi-select. Same call the tap handler uses.
+                        onToggle = { key -> vm.toggle(key) },
+                        // Pinch gesture: if your ViewModel's setter has another name, change it here.
+                        onColumnsChange = { vm.setGrid(it) }
+                    )
                 }
                 if (busy) LinearProgressIndicator(Modifier.fillMaxWidth().align(Alignment.TopCenter))
             }
@@ -438,6 +461,7 @@ fun MediaScreen(vm: HomeViewModel, nav: NavHostController, isAlbum: Boolean = fa
             )
         }
     }
+
     if (moreOpen) AlertDialog(
         onDismissRequest = { moreOpen = false },
         title = { Text("${selectedItems.size} selected") },
@@ -489,25 +513,212 @@ private fun SortFilterSheet(vm: HomeViewModel, onDismiss: () -> Unit) {
     }
 }
 
+// =========================================================================
+// Grid with gestures
+// =========================================================================
+
+private enum class TouchMode { TAP, SCROLL, PINCH, LONG_PRESS }
+
+/** Bookkeeping for one long-press + drag selection. Only touched from the gesture and the auto-scroll loop. */
+private class DragSelection {
+    var active = false
+    var anchor = -1
+    var lastIndex = -1
+    /** true = the drag selects items, false = it deselects them. */
+    var selectMode = true
+    var original: Set<String> = emptySet()
+    /** Keys this drag has flipped so far, so they can be flipped back when the range shrinks. */
+    val toggled = HashSet<String>()
+    var pointer = Offset.Zero
+}
+
+private fun autoScrollStep(depth: Float, edge: Float): Float = (depth / edge).coerceIn(0.1f, 1.5f) * 28f
+
+/**
+ * Gestures on the media grid:
+ *  - Tap: handled by the tiles.
+ *  - Pinch (two fingers): fewer / more columns.
+ *  - Long-press, then drag: select (or deselect) every item between the pressed item and the finger.
+ *    Dragging near the top or bottom edge scrolls the grid.
+ * Everything runs in one pointer handler (Initial pass) so the gestures never fight each other.
+ * Events are consumed only while pinching or drag-selecting, so normal scrolling is untouched.
+ */
 @Composable
 private fun MediaGrid(
     rows: List<GridRow>,
     columns: Int,
     selected: Set<String>,
     onTap: (MediaItem) -> Unit,
-    onLong: (MediaItem) -> Unit
+    onToggle: (String) -> Unit,
+    onColumnsChange: (Int) -> Unit
 ) {
     // Stable keys keep the scroll position anchored when the list updates underneath the user.
     val gridState = rememberLazyGridState()
     val selectionActive = selected.isNotEmpty()
     val bottom = FloatingBarClearance + WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
+
+    // Latest values for the long-lived pointer-input block below.
+    val currentRows by rememberUpdatedState(rows)
+    val currentSelected by rememberUpdatedState(selected)
+    val currentColumns by rememberUpdatedState(columns.coerceIn(2, 6))
+    val currentToggle by rememberUpdatedState(onToggle)
+    val currentOnColumns by rememberUpdatedState(onColumnsChange)
+    val haptics = LocalHapticFeedback.current
+
+    val drag = remember { DragSelection() }
+    var autoScroll by remember { mutableStateOf(0f) }   // px per frame; negative = up, positive = down
+    val autoScrolling by remember { derivedStateOf { autoScroll != 0f } }
+
+    fun indexAt(p: Offset): Int =
+        gridState.layoutInfo.visibleItemsInfo.firstOrNull { info ->
+            p.x >= info.offset.x && p.x < info.offset.x + info.size.width &&
+                    p.y >= info.offset.y && p.y < info.offset.y + info.size.height
+        }?.index ?: -1
+
+    fun mediaKeyAt(index: Int): String? = (currentRows.getOrNull(index) as? GridRow.Media)?.item?.key
+
+    /** Selects / deselects everything between the anchor and [toIndex], undoing items that left the range. */
+    fun applyRange(toIndex: Int) {
+        if (!drag.active || drag.anchor < 0) return
+        val lo = minOf(drag.anchor, toIndex)
+        val hi = maxOf(drag.anchor, toIndex)
+
+        val want = HashSet<String>()
+        for (i in lo..hi) {
+            val key = mediaKeyAt(i) ?: continue
+            if ((key in drag.original) != drag.selectMode) want += key
+        }
+        want.forEach { if (it !in drag.toggled) currentToggle(it) }
+        drag.toggled.forEach { if (it !in want) currentToggle(it) }
+        drag.toggled.clear()
+        drag.toggled.addAll(want)
+    }
+
+    fun updatePointer(p: Offset) {
+        drag.pointer = p
+        val idx = indexAt(p)
+        if (idx >= 0 && mediaKeyAt(idx) != null) drag.lastIndex = idx
+        if (drag.lastIndex >= 0) applyRange(drag.lastIndex)
+    }
+
+    fun beginDrag(p: Offset): Boolean {
+        val idx = indexAt(p)
+        val key = mediaKeyAt(idx) ?: return false
+        drag.active = true
+        drag.anchor = idx
+        drag.lastIndex = idx
+        drag.pointer = p
+        drag.original = currentSelected
+        drag.toggled.clear()
+        // Starting on an already selected item turns the drag into "deselect".
+        drag.selectMode = key !in drag.original
+        applyRange(idx)
+        return true
+    }
+
+    fun endDrag() {
+        drag.active = false
+        autoScroll = 0f
+    }
+
+    // Keeps scrolling while the finger rests near the top or bottom edge during a drag selection.
+    LaunchedEffect(autoScrolling) {
+        if (!autoScrolling) return@LaunchedEffect
+        while (isActive) {
+            withFrameNanos { }
+            if (!drag.active) break
+            gridState.scrollBy(autoScroll)
+            updatePointer(drag.pointer)
+        }
+    }
+
     LazyVerticalGrid(
         state = gridState,
         columns = GridCells.Fixed(columns.coerceIn(2, 6)),
         contentPadding = PaddingValues(bottom = bottom),
         horizontalArrangement = Arrangement.spacedBy(2.dp),
         verticalArrangement = Arrangement.spacedBy(2.dp),
-        modifier = Modifier.fillMaxSize()
+        modifier = Modifier
+            .fillMaxSize()
+            .pointerInput(Unit) {
+                awaitEachGesture {
+                    val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+
+                    // Phase 1: is this a long press, a pinch, a scroll or a plain tap?
+                    var mode = TouchMode.TAP
+                    val timedOut = withTimeoutOrNull(viewConfiguration.longPressTimeoutMillis) {
+                        while (true) {
+                            val event = awaitPointerEvent(PointerEventPass.Initial)
+                            if (event.changes.count { it.pressed } >= 2) {
+                                mode = TouchMode.PINCH
+                                return@withTimeoutOrNull
+                            }
+                            val change = event.changes.firstOrNull { it.id == down.id }
+                            if (change == null || !change.pressed) {
+                                mode = TouchMode.TAP
+                                return@withTimeoutOrNull
+                            }
+                            if ((change.position - down.position).getDistance() > viewConfiguration.touchSlop) {
+                                mode = TouchMode.SCROLL
+                                return@withTimeoutOrNull
+                            }
+                        }
+                    } == null
+                    if (timedOut) mode = TouchMode.LONG_PRESS
+
+                    // Phase 2a: long press -> drag selection
+                    if (mode == TouchMode.LONG_PRESS) {
+                        if (beginDrag(down.position)) {
+                            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                            val edge = 88.dp.toPx()
+                            val viewportH = size.height.toFloat()
+                            while (true) {
+                                val event = awaitPointerEvent(PointerEventPass.Initial)
+                                val change = event.changes.firstOrNull { it.id == down.id }
+                                // Eat everything (including the final "up") so the grid doesn't scroll
+                                // and the tile underneath doesn't register a click.
+                                event.changes.forEach { it.consume() }
+                                if (change == null || !change.pressed) break
+
+                                val p = change.position
+                                autoScroll = when {
+                                    p.y < edge -> -autoScrollStep(edge - p.y, edge)
+                                    p.y > viewportH - edge -> autoScrollStep(p.y - (viewportH - edge), edge)
+                                    else -> 0f
+                                }
+                                updatePointer(p)
+                            }
+                            endDrag()
+                            return@awaitEachGesture
+                        }
+                        // Long press on a header or in a gap: nothing to select.
+                        mode = TouchMode.SCROLL
+                    }
+
+                    // Phase 2b: keep watching for a pinch (also when a scroll has already started)
+                    var stillDown = mode != TouchMode.TAP
+                    var scale = 1f
+                    while (stillDown) {
+                        val event = awaitPointerEvent(PointerEventPass.Initial)
+                        stillDown = event.changes.any { it.pressed }
+                        if (event.changes.count { it.pressed } >= 2) {
+                            scale *= event.calculateZoom()
+
+                            val stepOut = scale > 1.25f   // spread: bigger photos, fewer columns
+                            val stepIn = scale < 0.8f     // pinch: smaller photos, more columns
+                            if (stepOut || stepIn) {
+                                val target = (if (stepOut) currentColumns - 1 else currentColumns + 1).coerceIn(2, 6)
+                                scale = 1f
+                                if (target != currentColumns) {
+                                    haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                    currentOnColumns(target)
+                                }
+                            }
+                            event.changes.forEach { if (it.positionChanged()) it.consume() }
+                        }
+                    }
+                }
+            }
     ) {
         items(
             items = rows,
@@ -518,8 +729,8 @@ private fun MediaGrid(
             when (row) {
                 is GridRow.Header -> Text(
                     row.label,
-                    Modifier.padding(start = 20.dp, end = 20.dp, top = 22.dp, bottom = 10.dp),
-                    fontSize = 20.sp,
+                    Modifier.padding(start = 18.dp, end = 20.dp, top = 15.dp, bottom = 15.dp),
+                    fontSize = 16.sp,
                     fontWeight = FontWeight.SemiBold,
                     color = MaterialTheme.colorScheme.onBackground
                 )
@@ -527,8 +738,7 @@ private fun MediaGrid(
                     item = row.item,
                     selectionActive = selectionActive,
                     isSelected = row.item.key in selected,
-                    onTap = { onTap(row.item) },
-                    onLong = { onLong(row.item) }
+                    onTap = { onTap(row.item) }
                 )
             }
         }
@@ -536,11 +746,12 @@ private fun MediaGrid(
 }
 
 @Composable
-private fun MediaTile(item: MediaItem, selectionActive: Boolean, isSelected: Boolean, onTap: () -> Unit, onLong: () -> Unit) {
+private fun MediaTile(item: MediaItem, selectionActive: Boolean, isSelected: Boolean, onTap: () -> Unit) {
+    // Long press is handled by the grid (long-press + drag selection), so the tile only handles taps.
     Box(
         Modifier
             .aspectRatio(1f)
-            .combinedClickable(onClick = onTap, onLongClick = onLong)
+            .combinedClickable(onClick = onTap)
     ) {
         MediaThumb(item.uri, Modifier.fillMaxSize(), item.name)
         if (item.isVideo) {

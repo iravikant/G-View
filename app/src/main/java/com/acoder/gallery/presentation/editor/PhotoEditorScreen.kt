@@ -1061,21 +1061,26 @@ private fun inpaint(src: Bitmap, strokes: List<List<Offset>>, brushFrac: Float):
     val wpx = IntArray(ww * wh); workBmp.getPixels(wpx, 0, ww, 0, 0, ww, wh)
     val wmp = IntArray(ww * wh); workMask.getPixels(wmp, 0, ww, 0, 0, ww, wh)
     var hole = BooleanArray(ww * wh) { (wmp[it] ushr 24) > 40 }
-    hole = dilate(hole, ww, wh, 2)   // swallow soft edges, halos and thin shadows
+    hole = dilate(hole, ww, wh, 3)   // swallow soft edges, halos and thin shadows
 
     fillPatches(wpx, hole, ww, wh)
+    matchHoleColors(wpx, hole, ww, wh)   // make the fill's colours flow seamlessly into its surroundings
 
     val filled = Bitmap.createBitmap(ww, wh, Bitmap.Config.ARGB_8888).also { it.setPixels(wpx, 0, ww, 0, 0, ww, wh) }
     val up = if (sc < 1f) Bitmap.createScaledBitmap(filled, rw, rh, true) else filled
     val upPx = IntArray(rw * rh); up.getPixels(upPx, 0, rw, 0, 0, rw, rh)
     val orig = IntArray(rw * rh); src.getPixels(orig, 0, rw, rx, ry, rw, rh)
 
-    // Feathered blend so there is no visible seam
+    // Blend mask: fully solid over the dilated hole (so no leftover object edge/halo colour bleeds through),
+    // feathering only OUTSIDE it where the original pixels are clean.
+    val dil = ceil(3f / sc).toInt() + 1
     val alpha = FloatArray(rw * rh) { if ((maskPx[it] ushr 24) > 40) 1f else 0f }
-    val fr = maxOf(2, (brushPx * 0.12f).toInt())
-    boxBlur(alpha, rw, rh, fr); boxBlur(alpha, rw, rh, fr)
+    boxBlur(alpha, rw, rh, dil)
+    for (i in alpha.indices) alpha[i] = if (alpha[i] > 0.001f) 1f else 0f
+    val fr = maxOf(3, (brushPx * 0.08f).toInt())
+    boxBlur(alpha, rw, rh, fr)
     for (i in orig.indices) {
-        val a = (alpha[i] * 2.5f).coerceIn(0f, 1f)
+        val a = (alpha[i] * 2f).coerceIn(0f, 1f)
         if (a <= 0f) continue
         val o = orig[i]; val u = upPx[i]
         val r = (((o shr 16) and 255) * (1 - a) + ((u shr 16) and 255) * a).toInt()
@@ -1087,6 +1092,75 @@ private fun inpaint(src: Bitmap, strokes: List<List<Offset>>, brushFrac: Float):
     val out = src.copy(Bitmap.Config.ARGB_8888, true)
     out.setPixels(orig, 0, rw, rx, ry, rw, rh)
     return out
+}
+
+/**
+ * Colour matching ("mean-value cloning"): for every hole pixel touching the outside, measure how far the filled colour
+ * is from the real neighbouring pixel, then spread that difference smoothly through the hole (Laplace / SOR solve) and
+ * add it to the fill. Texture is kept, but brightness, tint and gradients now line up with the surroundings.
+ */
+private fun matchHoleColors(px: IntArray, hole: BooleanArray, w: Int, h: Int) {
+    val n = w * h
+    val mr = FloatArray(n); val mg = FloatArray(n); val mb = FloatArray(n)
+    val fixed = BooleanArray(n)
+    val interior = IntArray(n); var ni = 0
+    val ddx = intArrayOf(1, -1, 0, 0); val ddy = intArrayOf(0, 0, 1, -1)
+    var minX = w; var maxX = 0; var minY = h; var maxY = 0
+    var sr = 0f; var sg = 0f; var sb = 0f; var nf = 0
+
+    for (y in 0 until h) for (x in 0 until w) {
+        val i = y * w + x
+        if (!hole[i]) continue
+        if (x < minX) minX = x; if (x > maxX) maxX = x; if (y < minY) minY = y; if (y > maxY) maxY = y
+        var cr = 0f; var cg = 0f; var cb = 0f; var c = 0
+        for (k in 0 until 4) {
+            val nx = x + ddx[k]; val ny = y + ddy[k]
+            if (nx in 0 until w && ny in 0 until h && !hole[ny * w + nx]) {
+                val q = px[ny * w + nx]
+                cr += (q shr 16) and 255; cg += (q shr 8) and 255; cb += q and 255; c++
+            }
+        }
+        if (c > 0) {
+            val g = px[i]
+            mr[i] = cr / c - ((g shr 16) and 255)
+            mg[i] = cg / c - ((g shr 8) and 255)
+            mb[i] = cb / c - (g and 255)
+            fixed[i] = true
+            sr += mr[i]; sg += mg[i]; sb += mb[i]; nf++
+        } else interior[ni++] = i
+    }
+    if (nf == 0) return
+    // Start the interior at the mean boundary offset so the solver converges quickly
+    for (t in 0 until ni) { val i = interior[t]; mr[i] = sr / nf; mg[i] = sg / nf; mb[i] = sb / nf }
+
+    val diameter = maxOf(maxX - minX, maxY - minY) + 1
+    val iterations = (60_000_000L / (ni * 12L + 1)).toInt().coerceIn(20, 2 * diameter)
+    val omega = 1.85f
+    repeat(iterations) {
+        for (t in 0 until ni) {
+            val i = interior[t]
+            val x = i % w; val y = i / w
+            var ar = 0f; var ag = 0f; var ab = 0f; var c = 0
+            for (k in 0 until 4) {
+                val nx = x + ddx[k]; val ny = y + ddy[k]
+                if (nx in 0 until w && ny in 0 until h) {
+                    val j = ny * w + nx
+                    ar += mr[j]; ag += mg[j]; ab += mb[j]; c++
+                }
+            }
+            if (c > 0) {
+                mr[i] += omega * (ar / c - mr[i]); mg[i] += omega * (ag / c - mg[i]); mb[i] += omega * (ab / c - mb[i])
+            }
+        }
+    }
+    for (i in 0 until n) {
+        if (!hole[i]) continue
+        val g = px[i]
+        val r = (((g shr 16) and 255) + mr[i]).roundToInt().coerceIn(0, 255)
+        val gg = (((g shr 8) and 255) + mg[i]).roundToInt().coerceIn(0, 255)
+        val b = ((g and 255) + mb[i]).roundToInt().coerceIn(0, 255)
+        px[i] = (255 shl 24) or (r shl 16) or (gg shl 8) or b
+    }
 }
 
 private fun dilate(m: BooleanArray, w: Int, h: Int, iterations: Int): BooleanArray {

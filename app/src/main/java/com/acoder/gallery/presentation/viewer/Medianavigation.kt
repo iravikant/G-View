@@ -48,6 +48,14 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.layout.findRootCoordinates
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.layout.ContentScale
@@ -82,16 +90,11 @@ object ViewerRoutes {
  *   ) { ... }
  */
 object ViewerTransitions {
-    val enter: EnterTransition =
-        fadeIn(tween(260, easing = FastOutSlowInEasing)) +
-                scaleIn(tween(320, easing = FastOutSlowInEasing), initialScale = 0.92f)
-    val exit: ExitTransition =
-        fadeOut(tween(180, easing = FastOutSlowInEasing)) +
-                scaleOut(tween(240, easing = FastOutSlowInEasing), targetScale = 0.96f)
-    val popEnter: EnterTransition = fadeIn(tween(200, easing = FastOutSlowInEasing))
-    val popExit: ExitTransition =
-        fadeOut(tween(200, easing = FastOutSlowInEasing)) +
-                scaleOut(tween(260, easing = FastOutSlowInEasing), targetScale = 0.90f)
+    // Plain fades: the motion comes from the shared-element (tile <-> viewer) transition.
+    val enter: EnterTransition = fadeIn(tween(320, easing = FastOutSlowInEasing))
+    val exit: ExitTransition = fadeOut(tween(320, easing = FastOutSlowInEasing))
+    val popEnter: EnterTransition = fadeIn(tween(320, easing = FastOutSlowInEasing))
+    val popExit: ExitTransition = fadeOut(tween(320, easing = FastOutSlowInEasing))
 }
 
 val MediaItem.isVideoMedia: Boolean
@@ -197,7 +200,7 @@ fun MediaThumbnailStrip(
     val liveCenter by remember { derivedStateOf { listState.centerIndex() } }
     val highlighted = if (listState.isScrollInProgress && !programmatic) liveCenter ?: currentIndex else currentIndex
 
-    BoxWithConstraints(Modifier.fillMaxWidth().height(64.dp)) {
+    BoxWithConstraints(Modifier.fillMaxWidth().height(84.dp)) {
         val sidePadding = ((maxWidth - ThumbWidth) / 2).coerceAtLeast(0.dp)
         LazyRow(
             state = listState,
@@ -209,7 +212,7 @@ fun MediaThumbnailStrip(
         ) {
             itemsIndexed(items, key = { _, it -> it.key }) { index, item ->
                 val selected = index == highlighted
-                val height by animateDpAsState(if (selected) 60.dp else 50.dp, tween(160), label = "thumbH")
+                val height by animateDpAsState(if (selected) 80.dp else 60.dp, tween(160), label = "thumbH")
                 val alpha by animateFloatAsState(if (selected) 1f else 0.72f, tween(160), label = "thumbA")
                 val shape = RoundedCornerShape(6.dp)
                 Box(
@@ -248,4 +251,40 @@ fun MediaThumbnailStrip(
             }
         }
     }
+}
+
+
+/**
+ * Gradient scrim for a top / bottom bar that always reaches the real screen edge.
+ *
+ * If a parent layout (Scaffold / NavHost container) has already consumed the system-bar insets, the bar
+ * starts *below* the status bar and a normal `background(gradient)` leaves the status-bar strip
+ * un-darkened - which shows as a hard-edged band. This measures the gap between the bar and the window
+ * edge and paints the gradient across it too (it can draw outside its own bounds). With no gap it is
+ * identical to a plain gradient background.
+ */
+@Composable
+fun Modifier.edgeBleedGradient(colors: List<Color>, top: Boolean): Modifier {
+    var gap by remember { mutableFloatStateOf(0f) }
+    return this
+        .onGloballyPositioned { c ->
+            val rootHeight = c.findRootCoordinates().size.height
+            val y = c.positionInRoot().y
+            gap = (if (top) y else rootHeight - (y + c.size.height)).coerceAtLeast(0f)
+        }
+        .drawBehind {
+            val g = gap
+            if (top) {
+                drawRect(
+                    brush = Brush.verticalGradient(colors, startY = -g, endY = size.height),
+                    topLeft = Offset(0f, -g),
+                    size = Size(size.width, size.height + g)
+                )
+            } else {
+                drawRect(
+                    brush = Brush.verticalGradient(colors, startY = 0f, endY = size.height + g),
+                    size = Size(size.width, size.height + g)
+                )
+            }
+        }
 }
