@@ -112,6 +112,8 @@ import com.acoder.gallery.presentation.home.MediaAction
 import com.acoder.gallery.presentation.media.deleteMessage
 import com.acoder.gallery.presentation.media.deleteTitle
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlin.math.abs
@@ -130,6 +132,7 @@ fun MediaViewerScreen(vm: HomeViewModel, nav: NavHostController) {
     var chrome by remember { mutableStateOf(true) }
     var menuOpen by remember { mutableStateOf(false) }
     var deleteConfirm by remember { mutableStateOf(false) }
+    var opening by remember { mutableStateOf(false) } // guards against opening the player twice
     val busy by vm.busy.collectAsState()
     val scope = rememberCoroutineScope()
 
@@ -206,8 +209,9 @@ fun MediaViewerScreen(vm: HomeViewModel, nav: NavHostController) {
                     }
                 ) {
                     items.getOrNull(page)?.let { item ->
-                        // only the visible page shares bounds with its grid tile
-                        val sharedMod = if (page == pager.currentPage) Modifier.mediaSharedBounds(item.key) else Modifier
+                        // Only the SETTLED page shares bounds with its grid tile. currentPage flips halfway
+                        // through a swipe, which made the shared-element modifier jump between pages mid-motion.
+                        val sharedMod = if (page == pager.settledPage) Modifier.mediaSharedBounds(item.key) else Modifier
                         if (item.isVideoMedia) {
                             VideoPreviewPage(
                                 item,
@@ -279,13 +283,26 @@ fun MediaViewerScreen(vm: HomeViewModel, nav: NavHostController) {
                     .navigationBarsPadding()
                     .padding(top = 24.dp, bottom = 12.dp)
             ) {
+                // Photos follow the strip live while it scrolls. Videos are NOT touched mid-scroll (no decoding
+                // while the finger moves); when the strip settles on a video it autoplays, as before - but only
+                // after the viewer is already showing that video's poster, so the hand-off is seamless.
                 MediaThumbnailStrip(
                     items, pager.currentPage,
-                    // photos follow the strip live while scrolling; videos open when it settles
                     onLiveScrub = { i -> if (items.getOrNull(i)?.isVideoMedia == false) scope.launch { pager.scrollToPage(i) } }
                 ) { index ->
-                    if (items[index].isVideoMedia) openMediaFromViewer(vm, nav, items, index)
-                    else scope.launch { pager.animateScrollToPage(index) }
+                    if (items[index].isVideoMedia) {
+                        if (!opening) {
+                            opening = true
+                            scope.launch {
+                                pager.scrollToPage(index)
+                                // wait (briefly) until that page is really settled, then start the transition
+                                withTimeoutOrNull(300) { snapshotFlow { pager.settledPage }.first { it == index } }
+                                openMediaFromViewer(vm, nav, items, index) // autoplay, unchanged
+                            }
+                        }
+                    } else {
+                        scope.launch { pager.animateScrollToPage(index) }
+                    }
                 }
                 Spacer(Modifier.height(12.dp))
                 Row(
@@ -306,7 +323,10 @@ fun MediaViewerScreen(vm: HomeViewModel, nav: NavHostController) {
                                 )
                             }
                             Spacer(Modifier.width(8.dp))
-                            IconButton({ nav.navigate("editor/${android.net.Uri.encode(current.uri.toString())}") }) {
+                            IconButton({
+                                val route = if (current.isVideoMedia) "video_editor" else "editor"
+                                nav.navigate("$route/${android.net.Uri.encode(current.uri.toString())}")
+                            }) {
                                 Icon(Icons.Default.Edit, "Edit", tint = Color.White)
                             }
                             Spacer(Modifier.width(8.dp))

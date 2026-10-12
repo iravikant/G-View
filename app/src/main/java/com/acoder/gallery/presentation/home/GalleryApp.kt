@@ -1,7 +1,12 @@
 package com.acoder.gallery.presentation.home
 
 import android.app.Activity
+import android.content.Context
+import android.content.Intent
 import android.net.Uri
+import android.os.Build
+import android.provider.MediaStore
+import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -21,9 +26,12 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.FilterList
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -54,6 +62,7 @@ import com.acoder.gallery.presentation.common.FloatingBottomBar
 import com.acoder.gallery.presentation.common.ForceLightSystemBarIcons
 import com.acoder.gallery.presentation.common.PermissionScreen
 import com.acoder.gallery.presentation.editor.PhotoEditorScreen
+import com.acoder.gallery.presentation.editor.VideoEditorScreen
 import com.acoder.gallery.presentation.media.MediaScreen
 import com.acoder.gallery.presentation.settings.SettingsScreen
 import com.acoder.gallery.presentation.trash.TrashScreen
@@ -63,6 +72,9 @@ import kotlinx.coroutines.launch
 
 private val TAB_ROUTES = listOf("media", "albums")
 private val TAB_LABELS = listOf("Photos", "Albums")
+
+private const val FIRST_RUN_PREFS = "gallery_first_run"
+private const val KEY_MANAGE_MEDIA_ASKED = "manage_media_asked"
 
 @Composable
 fun GalleryApp(vm: HomeViewModel = hiltViewModel()) {
@@ -100,6 +112,14 @@ fun GalleryApp(vm: HomeViewModel = hiltViewModel()) {
         val selected by vm.selected.collectAsState()
         val scope = rememberCoroutineScope()
         val snackbar = remember { SnackbarHostState() }
+
+        // --- One-time "manage media" prompt (Android 12+), shown right after storage access is granted. ---
+        val firstRunPrefs = remember { context.getSharedPreferences(FIRST_RUN_PREFS, Context.MODE_PRIVATE) }
+        var manageAsked by remember { mutableStateOf(firstRunPrefs.getBoolean(KEY_MANAGE_MEDIA_ASKED, false)) }
+        val markManageAsked = {
+            firstRunPrefs.edit().putBoolean(KEY_MANAGE_MEDIA_ASKED, true).apply()
+            manageAsked = true
+        }
 
         // --- One place handles the OS confirmation dialogs and snackbars for every screen. ---
         var pending by remember { mutableStateOf<HomeEvent.ConfirmAction?>(null) }
@@ -153,6 +173,15 @@ fun GalleryApp(vm: HomeViewModel = hiltViewModel()) {
                         PhotoEditorScreen(Uri.parse(encoded), nav)
                     }
                 }
+                composable(
+                    "video_editor/{uri}",
+                    arguments = listOf(navArgument("uri") { type = NavType.StringType })
+                ) { backStackEntry ->
+                    val encoded = backStackEntry.arguments?.getString("uri").orEmpty()
+                    Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).systemBarsPadding()) {
+                        VideoEditorScreen(Uri.parse(encoded), nav)
+                    }
+                }
             }
 
             AnimatedVisibility(
@@ -187,6 +216,35 @@ fun GalleryApp(vm: HomeViewModel = hiltViewModel()) {
             SnackbarHost(
                 snackbar,
                 Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(bottom = if (showBar) 92.dp else 12.dp)
+            )
+        }
+
+        // Asked once. Whichever button is pressed, we never ask again (it stays reachable via system settings).
+        if (Build.VERSION.SDK_INT >= 31 && !manageAsked && !MediaStore.canManageMedia(context)) {
+            AlertDialog(
+                onDismissRequest = { },
+                title = { Text("Allow media management?") },
+                text = {
+                    Text(
+                        "Allow Gallery to manage media so moving photos to the Recycle bin, restoring and " +
+                                "favoriting works without Android asking you every time. Gallery only changes " +
+                                "photos and videos when you ask it to."
+                    )
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        markManageAsked()
+                        try {
+                            context.startActivity(
+                                Intent(Settings.ACTION_REQUEST_MANAGE_MEDIA)
+                                    .setData(Uri.parse("package:${context.packageName}"))
+                            )
+                        } catch (_: Exception) {
+                            vm.notify("Couldn't open the system setting")
+                        }
+                    }) { Text("Continue") }
+                },
+                dismissButton = { TextButton(onClick = { markManageAsked() }) { Text("Not now") } }
             )
         }
     }

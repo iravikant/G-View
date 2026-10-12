@@ -10,6 +10,7 @@ import android.graphics.LinearGradient
 import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.Path
+import android.graphics.RadialGradient
 import android.graphics.RectF
 import android.graphics.Shader
 import android.graphics.Typeface
@@ -20,14 +21,15 @@ import android.util.Log
 import java.io.File
 import java.io.FileOutputStream
 import kotlin.coroutines.cancellation.CancellationException
-import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.ceil
 import kotlin.math.cos
+import kotlin.math.ln
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.roundToInt
 import kotlin.math.sin
-import kotlin.math.sqrt
+import kotlin.random.Random
 
 // =========================================================================
 // Model
@@ -35,11 +37,23 @@ import kotlin.math.sqrt
 
 /** How the photos are arranged. */
 enum class CollageLayout(val label: String) {
+    /** Dynamic: balanced split-tree layout that adapts to the photos. Use shuffle for new variations. */
+    SMART("Smart"),
+
+    /** Moodboard: tightly packed tiles of very different sizes, like a designer's board. */
+    MOODBOARD("Moodboard"),
+
+    /** Overlapping, slightly tilted panels layered on top of each other. */
+    LAYERED("Layered"),
+
+    /** Tilted prints pinned or taped on a board, scrapbook style. */
+    SCRAPBOOK("Scrapbook"),
+
     /** Equal square tiles. An incomplete last row is centered. */
     GRID("Grid"),
 
     /** One large featured photo on top, the rest in a grid below. */
-    HERO("Hero"),
+    FEATURE("Feature"),
 
     /** Justified rows that respect each photo's aspect ratio. */
     MOSAIC("Mosaic"),
@@ -53,38 +67,85 @@ enum class CollageLayout(val label: String) {
     /** One tall feature photo on the left, the rest stacked on the right. */
     MAGAZINE("Magazine"),
 
+    /** Columns that alternate between tall and short tiles. */
+    STAGGER("Stagger"),
+
+    /** Grid of arch-shaped (rounded top) tiles. */
+    ARCH("Arch"),
+
     /** Photos stacked vertically, like a story strip. */
-    STRIP("Strip"),
-
-    /** Round photos on a ring, with a larger one in the middle when there are enough. */
-    CIRCLE("Circle"),
-
-    /** A grid of round photos. */
-    DOTS("Dots"),
-
-    /** Hexagon photos packed like a honeycomb, growing outward from the middle. */
-    HEXAGON("Hexagon"),
-
-    /** Photos stacked in a pyramid: a narrow top, a wide bottom. */
-    TRIANGLE("Triangle")
+    STORY("Story")
 }
 
 /** Outline a photo is cropped to. */
-enum class TileShape { RECT, CIRCLE, HEXAGON }
+enum class TileShape { RECT, ARCH }
 
 /** One tile of a layout thumbnail: [rect] is [x, y, w, h] in a unit square. */
-class ThumbTile(val rect: FloatArray, val shape: TileShape)
+class ThumbTile(val rect: FloatArray, val shape: TileShape, val angle: Float = 0f)
 
 /** How each photo is presented. The background is chosen separately. */
 enum class CollageFrame(val label: String) {
+    /** Bright, airy, rounded. */
     CLEAN("Clean"),
-    DARK("Dark"),
-    FLOATING("Floating"),
-    POLAROID("Polaroid"),
-    MATTED("Matted"),
+
+    /** Pastel background, big corners and a soft glow of shadow. */
+    SOFT("Soft"),
+
+    /** Deep black with a hairline edge. */
+    NOIR("Noir"),
+
+    /** Museum style: off-white mats on a warm wall. */
+    GALLERY("Gallery"),
+
+    /** White cards with real elevation. */
+    FLOAT("Float"),
+
+    /** Frosted glass cards over an aurora gradient. */
     GLASS("Glass"),
-    FILM("Film"),
-    EDITORIAL("Editorial")
+
+    /** Warm paper with a thin printed frame. */
+    EDITORIAL("Editorial"),
+
+    /** Bold gradient with thick white borders, like die-cut stickers. */
+    STICKER("Sticker"),
+
+    /** Instant-film prints, slightly tilted. */
+    INSTANT("Instant"),
+
+    /** Light gray moodboard look: tight white tiles with a hairline shadow. */
+    MINIMAL("Minimal"),
+
+    /** Kraft paper board with tilted prints, tape and pins. */
+    SCRAPBOOK("Scrapbook"),
+
+    /** Ripped white paper edges on an aged paper background. */
+    TORN("Torn")
+}
+
+/** Procedural paper texture drawn over the background. */
+enum class CollageTexture(val label: String) {
+    NONE("None"),
+    PAPER("Paper"),
+    KRAFT("Kraft"),
+    LINEN("Linen"),
+    GRAIN("Grain")
+}
+
+/** Tape strips and pins attached to the tiles. */
+enum class CollageDecor(val label: String) {
+    NONE("None"),
+    TAPE("Tape"),
+    PINS("Pins"),
+    MIXED("Mixed")
+}
+
+/** Canvas shape for freeform layouts. [ratio] is height / width; null = decided by the layout. */
+enum class CollageCanvas(val label: String, val ratio: Float?) {
+    AUTO("Auto", null),
+    SQUARE("1:1", 1f),
+    PORTRAIT("4:5", 1.25f),
+    STORY("9:16", 16f / 9f),
+    LANDSCAPE("3:2", 2f / 3f)
 }
 
 /** Built-in Android system font families (no font files needed). */
@@ -125,6 +186,8 @@ data class CollageText(
     val shadow: Boolean = false,
     /** Soft rounded plate behind the text, useful when it sits on top of photos. */
     val backdrop: Boolean = false,
+    /** Paper-tape label with ragged ends behind the text (dark ink by default). */
+    val tape: Boolean = false,
     /** In em units. */
     val letterSpacing: Float = 0.04f,
     /** Degrees. */
@@ -136,7 +199,7 @@ data class CollageConfig(
     val frame: CollageFrame = CollageFrame.CLEAN,
     /** Output width in px. Height is calculated from the layout. */
     val width: Int = 1080,
-    /** Used by GRID and MASONRY. */
+    /** Used by GRID, MASONRY, STAGGER and ARCH. */
     val columns: Int = 2,
     /** Gap between tiles, px at 1080 width. null = the frame's default. */
     val spacing: Int? = null,
@@ -153,6 +216,14 @@ data class CollageConfig(
     val order: List<Int>? = null,
     /** Per-photo zoom / pan (keyed by uri index). Missing = fitted and centered. */
     val transforms: Map<Int, PhotoTransform> = emptyMap(),
+    /** Variation number for dynamic layouts (SMART). Same seed = same arrangement. */
+    val seed: Int = 0,
+    /** Canvas shape for SMART, MOODBOARD and LAYERED. */
+    val canvas: CollageCanvas = CollageCanvas.AUTO,
+    /** null = the frame's default texture. */
+    val texture: CollageTexture? = null,
+    /** null = automatic (Scrapbook gets tape and pins, everything else none). */
+    val decor: CollageDecor? = null,
     val quality: Int = 94
 )
 
@@ -168,7 +239,7 @@ class TileInfo(
     val imgW: Float,
     val imgH: Float,
     val photoCorner: Float,
-    /** Tile rotation in degrees (Polaroid). */
+    /** Tile rotation in degrees (Instant frame). */
     val angle: Float,
     val shape: TileShape = TileShape.RECT
 )
@@ -242,44 +313,66 @@ object CollageGenerator {
     // ---------------------------------------------------------------------
 
     /** Layouts that look good for [n] photos (the editor only offers these). */
-    fun layoutsFor(n: Int): List<CollageLayout> {
-        if (n <= 1) return listOf(CollageLayout.GRID)
-        val out = ArrayList<CollageLayout>()
-        if (n == 2) {
-            out += listOf(
-                CollageLayout.MOSAIC, CollageLayout.GRID, CollageLayout.MAGAZINE,
-                CollageLayout.HERO, CollageLayout.STRIP
-            )
-        } else {
-            out += listOf(
-                CollageLayout.GRID, CollageLayout.HERO, CollageLayout.MOSAIC,
-                CollageLayout.MASONRY, CollageLayout.BENTO
-            )
-            // Magazine and Strip get far too tall with many photos
-            if (n <= 6) out += listOf(CollageLayout.MAGAZINE, CollageLayout.STRIP)
+    fun layoutsFor(n: Int): List<CollageLayout> = when {
+        n <= 1 -> listOf(CollageLayout.GRID)
+        n == 2 -> listOf(
+            CollageLayout.MOSAIC, CollageLayout.GRID, CollageLayout.MAGAZINE,
+            CollageLayout.FEATURE, CollageLayout.STORY, CollageLayout.ARCH, CollageLayout.SCRAPBOOK
+        )
+        else -> buildList {
+            add(CollageLayout.SMART)
+            add(CollageLayout.MOODBOARD)
+            if (n <= 16) add(CollageLayout.LAYERED)
+            if (n <= 10) add(CollageLayout.SCRAPBOOK)
+            add(CollageLayout.BENTO)
+            add(CollageLayout.MOSAIC)
+            add(CollageLayout.MASONRY)
+            add(CollageLayout.GRID)
+            add(CollageLayout.FEATURE)
+            if (n >= 4) add(CollageLayout.STAGGER)
+            add(CollageLayout.ARCH)
+            // Magazine and Story get far too tall with many photos
+            if (n <= 6) {
+                add(CollageLayout.MAGAZINE)
+                add(CollageLayout.STORY)
+            }
         }
-        if (n <= 12) out += CollageLayout.CIRCLE
-        out += CollageLayout.DOTS
-        if (n <= 19) out += CollageLayout.HEXAGON
-        if (n in 3..15) out += CollageLayout.TRIANGLE
-        return out
     }
 
     /** The layout that suits [n] photos best. */
     fun defaultLayout(n: Int): CollageLayout = when {
         n <= 1 -> CollageLayout.GRID
         n == 2 -> CollageLayout.MOSAIC
-        n == 4 -> CollageLayout.GRID
-        n <= 8 -> CollageLayout.BENTO
-        else -> CollageLayout.MOSAIC
+        n <= 9 -> CollageLayout.SMART
+        else -> CollageLayout.MOODBOARD
     }
 
-    /** Sensible column count for Grid / Masonry with [n] photos. */
+    /** Sensible column count for column based layouts with [n] photos. */
     fun defaultColumns(n: Int): Int = when {
         n <= 4 -> 2
         n <= 9 -> 3
         else -> 4
     }
+
+    /** Layouts that react to the column count. */
+    fun usesColumns(layout: CollageLayout): Boolean = when (layout) {
+        CollageLayout.GRID, CollageLayout.MASONRY, CollageLayout.STAGGER, CollageLayout.ARCH -> true
+        else -> false
+    }
+
+    /** Layouts that offer a "shuffle" (different arrangement per seed). */
+    fun usesSeed(layout: CollageLayout): Boolean = when (layout) {
+        CollageLayout.SMART, CollageLayout.MOODBOARD, CollageLayout.LAYERED,
+        CollageLayout.SCRAPBOOK, CollageLayout.BENTO, CollageLayout.MAGAZINE -> true
+        else -> false
+    }
+
+    /** Layouts whose canvas shape (1:1, 4:5, 9:16, 3:2) can be chosen. */
+    fun usesCanvas(layout: CollageLayout): Boolean =
+        layout == CollageLayout.SMART || layout == CollageLayout.MOODBOARD || layout == CollageLayout.LAYERED
+
+    private fun isOverlapping(layout: CollageLayout): Boolean =
+        layout == CollageLayout.LAYERED || layout == CollageLayout.SCRAPBOOK
 
     /**
      * Schematic tiles of [layout] for [n] photos, fitted into a unit square.
@@ -288,51 +381,77 @@ object CollageGenerator {
     fun thumbRects(layout: CollageLayout, n: Int, columns: Int): List<ThumbTile> {
         val count = n.coerceIn(1, 9)
         val fake = List(count) { Source(Uri.EMPTY, it, 1000, 1000, ExifInterface.ORIENTATION_NORMAL) }
-        val res = buildLayout(layout, columns.coerceAtMost(count), fake, 1f, 0.06f)
+        val res = buildLayout(layout, columns.coerceAtMost(count), fake, 1f, 0.05f, 0, CollageCanvas.AUTO)
         val k = 1f / max(1f, res.contentHeight)
         val ox = (1f - k) / 2f
         val oy = (1f - res.contentHeight * k) / 2f
         return res.slots.mapIndexed { i, r ->
             ThumbTile(
                 floatArrayOf(r.left * k + ox, r.top * k + oy, r.width() * k, r.height() * k),
-                res.shapes?.getOrNull(i) ?: TileShape.RECT
+                res.shapes?.getOrNull(i) ?: TileShape.RECT,
+                res.angles?.getOrNull(i) ?: 0f
             )
         }
     }
 
     fun defaultBackground(frame: CollageFrame): CollageBackground = when (frame) {
-        CollageFrame.CLEAN, CollageFrame.EDITORIAL -> CollageBackground(listOf(Color.WHITE))
-        CollageFrame.DARK -> CollageBackground(listOf(0xFF111214.toInt()))
-        CollageFrame.FLOATING -> CollageBackground(listOf(0xFFF5F6F8.toInt(), 0xFFE3E6EB.toInt()), 90f)
-        CollageFrame.POLAROID -> CollageBackground(listOf(0xFFF1EBE0.toInt(), 0xFFDDD2BF.toInt()), 45f)
-        CollageFrame.MATTED -> CollageBackground(
-            listOf(0xFF1E2A5E.toInt(), 0xFF6A3D9A.toInt(), 0xFFE5566D.toInt()), 45f
-        )
+        CollageFrame.CLEAN -> CollageBackground(listOf(Color.WHITE))
+        CollageFrame.SOFT -> CollageBackground(listOf(0xFFFFF1EB.toInt(), 0xFFF1E8FF.toInt()), 135f)
+        CollageFrame.NOIR -> CollageBackground(listOf(0xFF0A0A0C.toInt(), 0xFF1B1C21.toInt()), 90f)
+        CollageFrame.GALLERY -> CollageBackground(listOf(0xFFECE8E1.toInt()))
+        CollageFrame.FLOAT -> CollageBackground(listOf(0xFFF5F6F8.toInt(), 0xFFE1E5EB.toInt()), 90f)
         CollageFrame.GLASS -> CollageBackground(
             listOf(0xFF0F2027.toInt(), 0xFF2C5364.toInt(), 0xFF3AAFA9.toInt()), 135f
         )
-        CollageFrame.FILM -> CollageBackground(listOf(0xFFEDEAE4.toInt()))
+        CollageFrame.EDITORIAL -> CollageBackground(listOf(0xFFF6F2EA.toInt()))
+        CollageFrame.STICKER -> CollageBackground(listOf(0xFFFFD86F.toInt(), 0xFFFC6262.toInt()), 135f)
+        CollageFrame.INSTANT -> CollageBackground(listOf(0xFFF1EBE0.toInt(), 0xFFDDD2BF.toInt()), 45f)
+        CollageFrame.MINIMAL -> CollageBackground(listOf(0xFFE3E4E6.toInt()))
+        CollageFrame.SCRAPBOOK -> CollageBackground(listOf(0xFFE6D3B8.toInt(), 0xFFD8BF9C.toInt()), 135f)
+        CollageFrame.TORN -> CollageBackground(listOf(0xFFE7DDCB.toInt(), 0xFFD7C9B1.toInt()), 135f)
+    }
+
+    /** Paper texture a frame comes with. */
+    fun defaultTexture(frame: CollageFrame): CollageTexture = when (frame) {
+        CollageFrame.SCRAPBOOK -> CollageTexture.KRAFT
+        CollageFrame.TORN -> CollageTexture.PAPER
+        else -> CollageTexture.NONE
     }
 
     fun defaultSpacing(frame: CollageFrame): Int = when (frame) {
-        CollageFrame.CLEAN, CollageFrame.DARK -> 12
-        CollageFrame.FLOATING, CollageFrame.MATTED -> 20
-        CollageFrame.POLAROID -> 32
+        CollageFrame.CLEAN -> 12
+        CollageFrame.SOFT -> 18
+        CollageFrame.NOIR -> 10
+        CollageFrame.GALLERY -> 28
+        CollageFrame.FLOAT -> 22
         CollageFrame.GLASS -> 16
-        CollageFrame.FILM -> 18
         CollageFrame.EDITORIAL -> 14
+        CollageFrame.STICKER -> 20
+        CollageFrame.INSTANT -> 32
+        CollageFrame.MINIMAL -> 6
+        CollageFrame.SCRAPBOOK -> 14
+        CollageFrame.TORN -> 8
     }
 
     fun defaultCorner(frame: CollageFrame): Int = when (frame) {
-        CollageFrame.CLEAN, CollageFrame.DARK, CollageFrame.FLOATING, CollageFrame.MATTED -> 24
-        CollageFrame.GLASS -> 28
-        CollageFrame.POLAROID, CollageFrame.FILM -> 6
+        CollageFrame.CLEAN -> 24
+        CollageFrame.SOFT -> 40
+        CollageFrame.NOIR -> 16
+        CollageFrame.GALLERY -> 0
+        CollageFrame.FLOAT -> 28
+        CollageFrame.GLASS -> 30
         CollageFrame.EDITORIAL -> 0
+        CollageFrame.STICKER -> 30
+        CollageFrame.INSTANT -> 6
+        CollageFrame.MINIMAL -> 4
+        CollageFrame.SCRAPBOOK -> 4
+        CollageFrame.TORN -> 0
     }
 
     /** These frames ignore the corner setting. */
     fun hasFixedCorner(frame: CollageFrame): Boolean =
-        frame == CollageFrame.POLAROID || frame == CollageFrame.FILM || frame == CollageFrame.EDITORIAL
+        frame == CollageFrame.INSTANT || frame == CollageFrame.GALLERY || frame == CollageFrame.EDITORIAL ||
+                frame == CollageFrame.SCRAPBOOK || frame == CollageFrame.TORN
 
     /** Dark or light ink, whichever contrasts with [bg]. */
     fun inkFor(bg: CollageBackground): Int {
@@ -355,7 +474,7 @@ object CollageGenerator {
             else -> Typeface.NORMAL
         }
         val paint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = t.color ?: autoColor
+            color = t.color ?: if (t.tape) 0xFF2B2623.toInt() else autoColor
             textAlign = Paint.Align.CENTER
             textSize = size
             letterSpacing = t.letterSpacing
@@ -371,6 +490,40 @@ object CollageGenerator {
 
         canvas.save()
         canvas.rotate(t.rotation, cx, cy)
+
+        if (t.tape) {
+            val maxW = lines.maxOf { paint.measureText(it) }
+            val l = cx - maxW / 2f - size * 0.7f
+            val r = cx + maxW / 2f + size * 0.7f
+            val tp = cy - blockH / 2f - size * 0.3f
+            val bt = cy + blockH / 2f + size * 0.3f
+            val tooth = size * 0.2f
+            val amp = size * 0.08f
+            val path = Path()
+            path.moveTo(l, tp)
+            path.lineTo(r, tp)
+            var y = tp
+            var out = true
+            while (y < bt) {
+                y = min(y + tooth, bt)
+                path.lineTo(if (out) r + amp else r, y)
+                out = !out
+            }
+            path.lineTo(l, bt)
+            y = bt
+            out = true
+            while (y > tp) {
+                y = max(y - tooth, tp)
+                path.lineTo(if (out) l - amp else l, y)
+                out = !out
+            }
+            path.close()
+            val tapePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = 0xF2EADCC4.toInt()
+                setShadowLayer(size * 0.12f, 0f, size * 0.05f, 0x44000000)
+            }
+            canvas.drawPath(path, tapePaint)
+        }
 
         if (t.backdrop) {
             val maxW = lines.maxOf { paint.measureText(it) }
@@ -416,7 +569,7 @@ object CollageGenerator {
 
         canvas.save()
         if (tile.angle != 0f) canvas.rotate(tile.angle, tile.card.centerX(), tile.card.centerY())
-        // Clip to the rounded tile, then draw the whole bitmap through an exact transform.
+        // Clip to the tile outline, then draw the whole bitmap through an exact transform.
         // No shader is involved, so it can never smear edge pixels into streaks.
         val clip = shapePath(tile.shape, dst, tile.photoCorner)
         canvas.clipPath(clip)
@@ -460,7 +613,8 @@ object CollageGenerator {
         require(config.width in 480..4096) { "width must be between 480 and 4096" }
 
         val s = config.width / 1080f
-        val spec = specFor(config, s)
+        val overlapping = isOverlapping(config.layout)
+        val spec = specFor(config, s, overlapping)
 
         val all = uris.mapIndexed { i, u -> readSource(context, u, i) }
         val requested = config.order
@@ -471,7 +625,7 @@ object CollageGenerator {
 
         val width = config.width.toFloat()
         val contentW = width - spec.padding * 2f
-        val layout = buildLayout(config.layout, config.columns, sources, contentW, spec.gap)
+        val layout = buildLayout(config.layout, config.columns, sources, contentW, spec.gap, config.seed, config.canvas)
 
         val footerH = if (config.footer) 130f * s else 0f
         val totalH = ceil(spec.padding * 2f + layout.contentHeight + footerH).toInt()
@@ -487,9 +641,13 @@ object CollageGenerator {
         try {
             val canvas = Canvas(out)
             drawBackground(canvas, bg, width, totalH.toFloat())
+            drawTexture(canvas, config.texture ?: defaultTexture(config.frame), width, totalH.toFloat(), s)
 
             val photoPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
             var drawn = 0
+            val decor = config.decor
+                ?: if (config.layout == CollageLayout.SCRAPBOOK || config.frame == CollageFrame.SCRAPBOOK) CollageDecor.MIXED
+                else CollageDecor.NONE
 
             layout.slots.forEachIndexed { i, slot ->
                 if (!shouldContinue()) throw CancellationException("Collage render cancelled")
@@ -497,14 +655,18 @@ object CollageGenerator {
                 val src = sources[i]
                 val card = RectF(slot).apply { offset(spec.padding, spec.padding) }
                 val shape = layout.shapes?.getOrNull(i) ?: TileShape.RECT
-                val photo = photoRect(config.frame, card, s, shape)
+                val photo = photoRect(config.frame, card, s, shape, overlapping)
 
                 // Tile geometry for the editor
                 val photoAspect = photo.width() / photo.height()
                 val wider = src.aspect > photoAspect
                 val imgW = if (wider) photo.height() * src.aspect else photo.width()
                 val imgH = if (wider) photo.height() else photo.width() / src.aspect
-                val angle = if (config.frame == CollageFrame.POLAROID) POLAROID_ANGLES[i % POLAROID_ANGLES.size] else 0f
+                val angle = layout.angles?.getOrNull(i) ?: when (config.frame) {
+                    CollageFrame.INSTANT -> INSTANT_ANGLES[i % INSTANT_ANGLES.size]
+                    CollageFrame.SCRAPBOOK -> INSTANT_ANGLES[i % INSTANT_ANGLES.size] * 0.6f
+                    else -> 0f
+                }
                 tiles += TileInfo(src.index, RectF(card), RectF(photo), imgW, imgH, spec.photoCorner, angle, shape)
 
                 val bmp = try {
@@ -520,7 +682,8 @@ object CollageGenerator {
                 } ?: return@forEachIndexed
 
                 val xf = config.transforms[src.index] ?: PhotoTransform()
-                drawTile(canvas, config.frame, spec, card, photo, bmp, angle, s, ink, photoPaint, shape, xf)
+                drawTile(canvas, config.frame, spec, card, photo, bmp, angle, s, ink, photoPaint, shape, xf, i, config.seed)
+                if (decor != CollageDecor.NONE) drawDecor(canvas, decor, card, angle, s, config.seed, i)
                 bmp.recycle()
                 drawn++
             }
@@ -561,33 +724,46 @@ object CollageGenerator {
         ink: Int,
         photoPaint: Paint,
         shape: TileShape = TileShape.RECT,
-        xf: PhotoTransform = PhotoTransform()
+        xf: PhotoTransform = PhotoTransform(),
+        tileIndex: Int = 0,
+        seed: Int = 0
     ) {
         canvas.save()
         if (angle != 0f) canvas.rotate(angle, card.centerX(), card.centerY())
 
-        // Paper, mat, glass or film base behind the photo
+        // Card, mat, glass or print base behind the photo (also carries the shadow)
         if (spec.paperColor != null) {
             val paper = Paint(Paint.ANTI_ALIAS_FLAG).apply {
                 color = spec.paperColor
                 if (spec.shadow) setShadowLayer(spec.shadowRadius, 0f, spec.shadowRadius * 0.4f, spec.shadowColor)
             }
-            canvas.drawPath(shapePath(shape, card, spec.paperCorner), paper)
+            val paperPath = if (frame == CollageFrame.TORN && shape == TileShape.RECT) {
+                tornPath(card, s, Random(tileIndex * 7919L + seed * 31L + 11L))
+            } else {
+                shapePath(shape, card, spec.paperCorner)
+            }
+            canvas.drawPath(paperPath, paper)
         }
-
-        if (frame == CollageFrame.FILM && shape == TileShape.RECT) drawFilmHoles(canvas, card, photo, s)
 
         drawCover(canvas, bmp, photo, spec.photoCorner, photoPaint, xf.panX, xf.panY, xf.zoom, shape)
 
         when (frame) {
-            CollageFrame.DARK -> {
+            CollageFrame.NOIR -> {
                 val stroke = Paint(Paint.ANTI_ALIAS_FLAG).apply {
                     style = Paint.Style.STROKE
                     strokeWidth = 2f * s
-                    color = (ink and 0x00FFFFFF) or (0x26 shl 24)
+                    color = (ink and 0x00FFFFFF) or (0x30 shl 24)
                 }
                 val r = RectF(photo).apply { inset(s, s) }
                 canvas.drawPath(shapePath(shape, r, spec.photoCorner), stroke)
+            }
+            CollageFrame.GALLERY -> {
+                val stroke = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    style = Paint.Style.STROKE
+                    strokeWidth = 1.4f * s
+                    color = 0x24000000
+                }
+                canvas.drawPath(shapePath(shape, photo, 0f), stroke)
             }
             CollageFrame.GLASS -> {
                 val stroke = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -603,30 +779,11 @@ object CollageGenerator {
         canvas.restore()
     }
 
-    private fun drawFilmHoles(canvas: Canvas, card: RectF, photo: RectF, s: Float) {
-        val margin = photo.left - card.left
-        val hole = margin * 0.46f
-        if (hole < 2f) return
-        val pitch = hole * 2.1f
-        val count = ((card.height() - hole) / pitch).toInt().coerceAtLeast(1)
-        val span = (count - 1) * pitch + hole
-        val startY = card.top + (card.height() - span) / 2f
-        val leftX = card.left + (margin - hole) / 2f
-        val rightX = card.right - margin + (margin - hole) / 2f
-        val p = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFFE9E5DC.toInt() }
-        val r = 2f * s
-        for (k in 0 until count) {
-            val y = startY + k * pitch
-            canvas.drawRoundRect(RectF(leftX, y, leftX + hole, y + hole * 0.78f), r, r, p)
-            canvas.drawRoundRect(RectF(rightX, y, rightX + hole, y + hole * 0.78f), r, r, p)
-        }
-    }
-
     // ---------------------------------------------------------------------
     // Style specification
     // ---------------------------------------------------------------------
 
-    private val POLAROID_ANGLES = floatArrayOf(-2.4f, 1.6f, -1.1f, 2.3f, -1.8f, 1.2f)
+    private val INSTANT_ANGLES = floatArrayOf(-2.4f, 1.6f, -1.1f, 2.3f, -1.8f, 1.2f)
 
     private class Spec(
         val padding: Float,
@@ -639,15 +796,15 @@ object CollageGenerator {
         val shadowColor: Int
     )
 
-    private fun specFor(cfg: CollageConfig, s: Float): Spec {
+    private fun specFor(cfg: CollageConfig, s: Float, overlapping: Boolean): Spec {
         val frame = cfg.frame
         val gap = (cfg.spacing ?: defaultSpacing(frame)) * s
         val corner = (if (hasFixedCorner(frame)) defaultCorner(frame) else (cfg.corner ?: defaultCorner(frame))) * s
         val pad = cfg.padding?.let { it * s }
 
-        return when (frame) {
-            CollageFrame.CLEAN, CollageFrame.DARK -> Spec(
-                padding = pad ?: max(gap * 2f, 24f * s),
+        val base = when (frame) {
+            CollageFrame.CLEAN, CollageFrame.NOIR -> Spec(
+                padding = pad ?: max(gap * 2f, 28f * s),
                 gap = gap,
                 photoCorner = corner,
                 paperCorner = 0f,
@@ -657,56 +814,46 @@ object CollageGenerator {
                 shadowColor = 0
             )
 
-            CollageFrame.FLOATING -> Spec(
-                padding = pad ?: 32f * s,
+            // The card sits exactly behind the photo, so it only contributes the soft shadow.
+            CollageFrame.SOFT -> Spec(
+                padding = pad ?: 40f * s,
                 gap = gap,
                 photoCorner = corner,
                 paperCorner = corner,
                 paperColor = Color.WHITE,
                 shadow = true,
-                shadowRadius = 18f * s,
-                shadowColor = 0x40000000
+                shadowRadius = 22f * s,
+                shadowColor = 0x2E000000
             )
 
-            CollageFrame.POLAROID -> Spec(
-                padding = pad ?: 48f * s,
-                gap = max(gap, 16f * s),
-                photoCorner = 2f * s,
-                paperCorner = corner,
-                paperColor = 0xFFFDFCF8.toInt(),
+            CollageFrame.GALLERY -> Spec(
+                padding = pad ?: 56f * s,
+                gap = gap,
+                photoCorner = 0f,
+                paperCorner = 2f * s,
+                paperColor = 0xFFFBFAF7.toInt(),
                 shadow = true,
-                shadowRadius = 14f * s,
-                shadowColor = 0x50000000
+                shadowRadius = 10f * s,
+                shadowColor = 0x2E000000
             )
 
-            CollageFrame.MATTED -> Spec(
-                padding = pad ?: 36f * s,
+            CollageFrame.FLOAT -> Spec(
+                padding = pad ?: 44f * s,
                 gap = gap,
                 photoCorner = max(corner - 6f * s, 0f),
                 paperCorner = corner,
                 paperColor = Color.WHITE,
                 shadow = true,
-                shadowRadius = 16f * s,
-                shadowColor = 0x55000000
+                shadowRadius = 24f * s,
+                shadowColor = 0x38000000
             )
 
             CollageFrame.GLASS -> Spec(
-                padding = pad ?: 36f * s,
+                padding = pad ?: 40f * s,
                 gap = gap,
                 photoCorner = max(corner - 8f * s, 0f),
                 paperCorner = corner,
                 paperColor = 0x33FFFFFF,
-                shadow = false,
-                shadowRadius = 0f,
-                shadowColor = 0
-            )
-
-            CollageFrame.FILM -> Spec(
-                padding = pad ?: 32f * s,
-                gap = gap,
-                photoCorner = 2f * s,
-                paperCorner = corner,
-                paperColor = 0xFF111111.toInt(),
                 shadow = false,
                 shadowRadius = 0f,
                 shadowColor = 0
@@ -722,34 +869,100 @@ object CollageGenerator {
                 shadowRadius = 0f,
                 shadowColor = 0
             )
+
+            CollageFrame.STICKER -> Spec(
+                padding = pad ?: 40f * s,
+                gap = gap,
+                photoCorner = max(corner - 9f * s, 0f),
+                paperCorner = corner,
+                paperColor = Color.WHITE,
+                shadow = true,
+                shadowRadius = 12f * s,
+                shadowColor = 0x4D000000
+            )
+
+            CollageFrame.INSTANT -> Spec(
+                padding = pad ?: 48f * s,
+                gap = max(gap, 16f * s),
+                photoCorner = 2f * s,
+                paperCorner = corner,
+                paperColor = 0xFFFDFCF8.toInt(),
+                shadow = true,
+                shadowRadius = 14f * s,
+                shadowColor = 0x50000000
+            )
+
+            CollageFrame.MINIMAL -> Spec(
+                padding = pad ?: 28f * s,
+                gap = gap,
+                photoCorner = corner,
+                paperCorner = corner,
+                paperColor = Color.WHITE,
+                shadow = true,
+                shadowRadius = 5f * s,
+                shadowColor = 0x26000000
+            )
+
+            CollageFrame.SCRAPBOOK -> Spec(
+                padding = pad ?: 52f * s,
+                gap = max(gap, 14f * s),
+                photoCorner = 2f * s,
+                paperCorner = corner,
+                paperColor = 0xFFFDFCF8.toInt(),
+                shadow = true,
+                shadowRadius = 12f * s,
+                shadowColor = 0x55000000
+            )
+
+            CollageFrame.TORN -> Spec(
+                padding = pad ?: 36f * s,
+                gap = gap,
+                photoCorner = 0f,
+                paperCorner = 0f,
+                paperColor = 0xFFFBFAF6.toInt(),
+                shadow = true,
+                shadowRadius = 9f * s,
+                shadowColor = 0x50000000
+            )
         }
+
+        // Overlapping layouts need a paper edge and shadow, or the tiles would melt into each other.
+        return if (overlapping && base.paperColor == null) {
+            Spec(base.padding, base.gap, base.photoCorner, base.photoCorner, Color.WHITE, true, 10f * s, 0x40000000)
+        } else base
     }
 
-    /** Where the photo sits inside its card (mat, polaroid border, film margins). */
-    private fun photoRect(frame: CollageFrame, card: RectF, s: Float, shape: TileShape): RectF {
-        if (shape == TileShape.RECT) return rectPhotoRect(frame, card, s)
-        // Round / hexagon tiles: a slim mat for every frame that has a border
+    /** Where the photo sits inside its card (mat, print border, torn edge). */
+    private fun photoRect(frame: CollageFrame, card: RectF, s: Float, shape: TileShape, overlapping: Boolean): RectF {
+        if (shape == TileShape.RECT) return rectPhotoRect(frame, card, s, overlapping)
+        // Arch tiles: a slim constant border for every frame that has one
         val margin = when (frame) {
-            CollageFrame.MATTED -> 6f * s
-            CollageFrame.GLASS, CollageFrame.POLAROID, CollageFrame.FILM -> 8f * s
-            else -> 0f
+            CollageFrame.FLOAT -> 6f * s
+            CollageFrame.GLASS, CollageFrame.INSTANT, CollageFrame.SCRAPBOOK -> 8f * s
+            CollageFrame.STICKER -> 9f * s
+            CollageFrame.GALLERY -> 10f * s
+            CollageFrame.TORN -> 12f * s
+            CollageFrame.MINIMAL -> 0f
+            else -> if (overlapping) 6f * s else 0f
         }
         return RectF(card).apply { inset(margin, margin) }
     }
 
-    private fun rectPhotoRect(frame: CollageFrame, card: RectF, s: Float): RectF = when (frame) {
-        CollageFrame.POLAROID -> {
+    private fun rectPhotoRect(frame: CollageFrame, card: RectF, s: Float, overlapping: Boolean): RectF = when (frame) {
+        CollageFrame.INSTANT, CollageFrame.SCRAPBOOK -> {
             val b = min(card.width(), card.height()) * 0.06f
             RectF(card.left + b, card.top + b, card.right - b, card.bottom - b * 3.4f)
         }
-        CollageFrame.MATTED -> RectF(card).apply { inset(6f * s, 6f * s) }
-        CollageFrame.GLASS -> RectF(card).apply { inset(8f * s, 8f * s) }
-        CollageFrame.FILM -> {
-            val side = min(card.width(), card.height()) * 0.11f
-            val vert = side * 0.45f
-            RectF(card.left + side, card.top + vert, card.right - side, card.bottom - vert)
+        CollageFrame.GALLERY -> {
+            val b = min(card.width(), card.height()) * 0.075f
+            RectF(card.left + b, card.top + b, card.right - b, card.bottom - b * 1.5f)
         }
-        else -> RectF(card)
+        CollageFrame.FLOAT -> RectF(card).apply { inset(6f * s, 6f * s) }
+        CollageFrame.GLASS -> RectF(card).apply { inset(8f * s, 8f * s) }
+        CollageFrame.STICKER -> RectF(card).apply { inset(9f * s, 9f * s) }
+        CollageFrame.TORN -> RectF(card).apply { inset(13f * s, 13f * s) }
+        CollageFrame.MINIMAL -> if (overlapping) RectF(card).apply { inset(4f * s, 4f * s) } else RectF(card)
+        else -> if (overlapping) RectF(card).apply { inset(6f * s, 6f * s) } else RectF(card)
     }
 
     // ---------------------------------------------------------------------
@@ -760,7 +973,9 @@ object CollageGenerator {
         val slots: List<RectF>,
         val contentHeight: Float,
         /** null = every tile is a rounded rectangle. */
-        val shapes: List<TileShape>? = null
+        val shapes: List<TileShape>? = null,
+        /** Per-tile rotation in degrees; null = decided by the frame. */
+        val angles: List<Float>? = null
     )
 
     private fun buildLayout(
@@ -768,7 +983,9 @@ object CollageGenerator {
         columns: Int,
         sources: List<Source>,
         contentW: Float,
-        gap: Float
+        gap: Float,
+        seed: Int,
+        canvas: CollageCanvas
     ): LayoutResult {
         val n = sources.size
         val layout = if (requested in layoutsFor(n)) requested else defaultLayout(n)
@@ -778,13 +995,19 @@ object CollageGenerator {
             return LayoutResult(listOf(RectF(0f, 0f, contentW, h)), h)
         }
 
+        val ratio = canvas.ratio ?: autoRatio(n)
         return when (layout) {
+            CollageLayout.SMART -> smartSlots(sources, contentW, gap, seed, ratio)
+            CollageLayout.MOODBOARD -> moodboardSlots(sources, contentW, gap, seed, ratio, overlap = false)
+            CollageLayout.LAYERED -> moodboardSlots(sources, contentW, gap, seed, ratio, overlap = true)
+            CollageLayout.SCRAPBOOK -> scrapbookSlots(n, contentW, seed)
+
             CollageLayout.GRID -> {
                 val (slots, h) = gridSlots(n, columns, contentW, gap, 0f, 1f)
                 LayoutResult(slots, h)
             }
 
-            CollageLayout.HERO -> {
+            CollageLayout.FEATURE -> {
                 val heroH = contentW * 0.68f
                 val m = n - 1
                 val cols = when {
@@ -792,24 +1015,32 @@ object CollageGenerator {
                     m == 4 -> 2
                     else -> 3
                 }
-                val ratio = if (cols <= 2) 0.72f else 1f
-                val (rest, h) = gridSlots(m, cols, contentW, gap, heroH + gap, ratio)
+                val r = if (cols <= 2) 0.72f else 1f
+                val (rest, h) = gridSlots(m, cols, contentW, gap, heroH + gap, r)
                 LayoutResult(listOf(RectF(0f, 0f, contentW, heroH)) + rest, heroH + gap + h)
             }
 
             CollageLayout.MOSAIC -> mosaicSlots(sources, contentW, gap)
             CollageLayout.MASONRY -> masonrySlots(sources, columns, contentW, gap)
-            CollageLayout.BENTO -> bentoSlots(n, contentW, gap)
-            CollageLayout.MAGAZINE -> magazineSlots(n, contentW, gap)
-            CollageLayout.STRIP -> stripSlots(sources, contentW, gap)
-            CollageLayout.CIRCLE -> ringSlots(n, contentW, gap)
-            CollageLayout.DOTS -> {
-                val (slots, h) = gridSlots(n, columns, contentW, gap, 0f, 1f)
-                LayoutResult(slots, h, List(n) { TileShape.CIRCLE })
+            CollageLayout.BENTO -> bentoSlots(n, contentW, gap, seed)
+            CollageLayout.MAGAZINE -> magazineSlots(n, contentW, gap, seed)
+            CollageLayout.STAGGER -> staggerSlots(n, columns, contentW, gap)
+
+            CollageLayout.ARCH -> {
+                val (slots, h) = gridSlots(n, columns, contentW, gap, 0f, 1.32f)
+                LayoutResult(slots, h, List(n) { TileShape.ARCH })
             }
-            CollageLayout.HEXAGON -> honeycombSlots(n, contentW, gap)
-            CollageLayout.TRIANGLE -> pyramidSlots(n, contentW, gap)
+
+            CollageLayout.STORY -> storySlots(sources, contentW, gap)
         }
+    }
+
+    private fun autoRatio(n: Int): Float = when {
+        n <= 3 -> 1.0f
+        n <= 5 -> 1.2f
+        n <= 8 -> 1.35f
+        n <= 12 -> 1.5f
+        else -> 1.8f
     }
 
     private fun gridSlots(
@@ -838,107 +1069,107 @@ object CollageGenerator {
         return slots to (rows * cellH + gap * (rows - 1))
     }
 
-    /** Circles on a ring; with 6+ photos the first one sits large in the middle. */
-    private fun ringSlots(n: Int, contentW: Float, gap: Float): LayoutResult {
-        if (n == 2) {
-            val d = (contentW - gap) / 2f
-            return LayoutResult(
-                listOf(RectF(0f, 0f, d, d), RectF(d + gap, 0f, contentW, d)),
-                d,
-                List(2) { TileShape.CIRCLE }
-            )
-        }
-        val hasCenter = n >= 6
-        val k = if (hasCenter) n - 1 else n
-        val sn = sin(PI / k).toFloat()
-        // Neighbouring circles on the ring just touch (plus the gap) and the ring fits the width
-        val d = ((contentW * sn - gap) / (1f + sn)).coerceAtLeast(1f)
-        val radius = contentW / 2f - d / 2f
-        val c = contentW / 2f
+    /**
+     * Dynamic layout: the canvas is split again and again (a binary space partition) until every
+     * photo has a tile. Many random candidates are tried and the one whose tiles best match the
+     * photos' own shapes wins, so landscape photos get wide tiles and portraits get tall ones.
+     * The same [seed] always gives the same result; a new seed gives a new arrangement.
+     */
+    private fun smartSlots(sources: List<Source>, contentW: Float, gap: Float, seed: Int, ratio: Float): LayoutResult {
+        val n = sources.size
+        val h = contentW * ratio
+        val asp = sources.map { it.aspect.coerceIn(0.5f, 2f) }
+        val limit = ln(2.2f)
 
-        val slots = ArrayList<RectF>(n)
-        if (hasCenter) {
-            val dc = max(2f * radius - d - gap, d * 0.5f)
-            slots += RectF(c - dc / 2f, c - dc / 2f, c + dc / 2f, c + dc / 2f)
-        }
-        for (i in 0 until k) {
-            val a = -PI / 2 + 2 * PI * i / k
-            val x = c + radius * cos(a).toFloat()
-            val y = c + radius * sin(a).toFloat()
-            slots += RectF(x - d / 2f, y - d / 2f, x + d / 2f, y + d / 2f)
-        }
-        val top = slots.minOf { it.top }
-        val bottom = slots.maxOf { it.bottom }
-        slots.forEach { it.offset(0f, -top) }
-        return LayoutResult(slots, bottom - top, List(n) { TileShape.CIRCLE })
-    }
+        var best: List<RectF>? = null
+        var bestScore = Float.MAX_VALUE
+        for (attempt in 0 until 40) {
+            val rng = Random(seed.toLong() * 1_000_003L + attempt)
+            val out = arrayOfNulls<RectF>(n)
+            partition((0 until n).toList(), RectF(0f, 0f, contentW, h), gap, rng, out)
 
-    /** Hexagons packed as a honeycomb, spiralling out from the middle one. */
-    private fun honeycombSlots(n: Int, contentW: Float, gap: Float): LayoutResult {
-        val sq3 = sqrt(3f)
-        val dirs = arrayOf(1 to 0, 1 to -1, 0 to -1, -1 to 0, -1 to 1, 0 to 1)
-        val hexes = ArrayList<Pair<Int, Int>>()
-        hexes += 0 to 0
-        var ring = 1
-        while (hexes.size < n) {
-            var q = -ring
-            var r = ring
-            for (side in 0 until 6) {
-                for (step in 0 until ring) {
-                    if (hexes.size < n) hexes += q to r
-                    q += dirs[side].first
-                    r += dirs[side].second
-                }
+            var score = 0f
+            for (i in 0 until n) {
+                val r = out[i]!!
+                val tileAspect = (r.width() / r.height()).coerceAtLeast(0.01f)
+                score += abs(ln(tileAspect / asp[i]))
+                val extreme = abs(ln(tileAspect))
+                if (extreme > limit) score += (extreme - limit) * 3f
             }
-            ring++
-        }
-
-        // Pointy-top hexagons of radius 1
-        val xs = hexes.map { sq3 * (it.first + it.second / 2f) }
-        val ys = hexes.map { 1.5f * it.second }
-        val minX = xs.minOf { it } - sq3 / 2f
-        val maxX = xs.maxOf { it } + sq3 / 2f
-        val minY = ys.minOf { it } - 1f
-        val maxY = ys.maxOf { it } + 1f
-        val scale = contentW / (maxX - minX)
-
-        val w = (sq3 * scale - gap).coerceAtLeast(1f)
-        val h = w * 2f / sq3
-        val slots = hexes.indices.map { i ->
-            val cx = (xs[i] - minX) * scale
-            val cy = (ys[i] - minY) * scale
-            RectF(cx - w / 2f, cy - h / 2f, cx + w / 2f, cy + h / 2f)
-        }
-        return LayoutResult(slots, (maxY - minY) * scale, List(n) { TileShape.HEXAGON })
-    }
-
-    /** Rows of 1, 2, 3 ... photos stacked into a pyramid; surplus spots are dropped from the top. */
-    private fun pyramidSlots(n: Int, contentW: Float, gap: Float): LayoutResult {
-        var m = 1
-        while (m * (m + 1) / 2 < n) m++
-        val sizes = MutableList(m) { it + 1 }
-        var excess = m * (m + 1) / 2 - n
-        var i = 0
-        while (excess > 0 && i < sizes.size) {
-            val take = min(sizes[i], excess)
-            sizes[i] -= take
-            excess -= take
-            i++
-        }
-        val rows = sizes.filter { it > 0 }
-
-        val cell = (contentW - gap * (m - 1)) / m
-        val slots = ArrayList<RectF>(n)
-        rows.forEachIndexed { row, count ->
-            val rowW = count * cell + gap * (count - 1)
-            val y = row * (cell + gap)
-            var x = (contentW - rowW) / 2f
-            repeat(count) {
-                slots += RectF(x, y, x + cell, y + cell)
-                x += cell + gap
+            score /= n
+            if (score < bestScore) {
+                bestScore = score
+                best = out.map { it!! }
             }
         }
-        return LayoutResult(slots, rows.size * cell + gap * (rows.size - 1))
+        return LayoutResult(best!!, h)
+    }
+
+    private fun partition(items: List<Int>, r: RectF, gap: Float, rng: Random, out: Array<RectF?>) {
+        val n = items.size
+        if (n == 1) {
+            out[items[0]] = RectF(r)
+            return
+        }
+        val k = when (n) {
+            2 -> 1
+            3 -> if (rng.nextBoolean()) 1 else 2
+            else -> (n / 2 + rng.nextInt(3) - 1).coerceIn(1, n - 1)
+        }
+        val first = items.subList(0, k)
+        val second = items.subList(k, n)
+
+        // A lone photo may become a larger "hero" tile
+        fun weight(size: Int): Float = if (size == 1) 1f + rng.nextFloat() * 1.2f else size.toFloat()
+        val wa = weight(first.size)
+        val wb = weight(second.size)
+        val frac = wa / (wa + wb)
+
+        val wide = r.width() >= r.height()
+        val sideBySide = if (rng.nextFloat() < 0.15f) !wide else wide
+
+        if (sideBySide) {
+            val avail = (r.width() - gap).coerceAtLeast(2f)
+            val wFirst = avail * frac
+            partition(first, RectF(r.left, r.top, r.left + wFirst, r.bottom), gap, rng, out)
+            partition(second, RectF(r.left + wFirst + gap, r.top, r.right, r.bottom), gap, rng, out)
+        } else {
+            val avail = (r.height() - gap).coerceAtLeast(2f)
+            val hFirst = avail * frac
+            partition(first, RectF(r.left, r.top, r.right, r.top + hFirst), gap, rng, out)
+            partition(second, RectF(r.left, r.top + hFirst + gap, r.right, r.bottom), gap, rng, out)
+        }
+    }
+
+    /** Columns whose tiles alternate between tall and short, offset from column to column. */
+    private fun staggerSlots(n: Int, columns: Int, contentW: Float, gap: Float): LayoutResult {
+        val cols = columns.coerceIn(2, 4).coerceAtMost(max(2, n / 2))
+        val colW = (contentW - gap * (cols - 1)) / cols
+
+        val items = List(cols) { ArrayList<Int>() }
+        for (i in 0 until n) items[i % cols] += i
+
+        val tall = colW * 1.35f
+        val short = colW * 0.9f
+        val natural = items.mapIndexed { c, list ->
+            list.indices.map { j -> if ((j + c) % 2 == 0) tall else short }
+        }
+        val target = natural.indices.maxOf { natural[it].sum() + gap * (items[it].size - 1) }
+
+        val slots = arrayOfNulls<RectF>(n)
+        for (c in 0 until cols) {
+            if (items[c].isEmpty()) continue
+            val avail = target - gap * (items[c].size - 1)
+            val factor = avail / natural[c].sum()
+            val x = c * (colW + gap)
+            var y = 0f
+            items[c].forEachIndexed { j, idx ->
+                val th = natural[c][j] * factor
+                slots[idx] = RectF(x, y, x + colW, y + th)
+                y += th + gap
+            }
+        }
+        return LayoutResult(slots.map { it!! }, target)
     }
 
     /** Justified rows: every full row spans the whole width exactly. */
@@ -1026,7 +1257,7 @@ object CollageGenerator {
         ))
     )
 
-    private fun bentoSlots(n: Int, contentW: Float, gap: Float): LayoutResult {
+    private fun bentoSlots(n: Int, contentW: Float, gap: Float, seed: Int): LayoutResult {
         val unit = (contentW - gap * 3f) / 4f
 
         val sizes = ArrayList<Int>()
@@ -1043,21 +1274,28 @@ object CollageGenerator {
 
         val slots = ArrayList<RectF>(n)
         var y = 0f
+        var block = 0
         for (size in sizes) {
             val (rows, cells) = BENTO_BLOCKS.getValue(size)
+            // Each shuffle mirrors / flips the blocks, so the same photos get new positions
+            val mirror = ((seed + block) and 1) == 1
+            val flip = (((seed + block) shr 1) and 1) == 1
             for (cell in cells) {
-                val x = cell[0] * (unit + gap)
-                val top = y + cell[1] * (unit + gap)
+                val col = if (mirror) 4 - cell[0] - cell[2] else cell[0]
+                val row = if (flip) rows - cell[1] - cell[3] else cell[1]
+                val x = col * (unit + gap)
+                val top = y + row * (unit + gap)
                 val w = cell[2] * unit + (cell[2] - 1) * gap
                 val h = cell[3] * unit + (cell[3] - 1) * gap
                 slots += RectF(x, top, x + w, top + h)
             }
             y += rows * (unit + gap)
+            block++
         }
         return LayoutResult(slots, y - gap)
     }
 
-    private fun magazineSlots(n: Int, contentW: Float, gap: Float): LayoutResult {
+    private fun magazineSlots(n: Int, contentW: Float, gap: Float, seed: Int): LayoutResult {
         val m = n - 1
         val leftW = (contentW - gap) * 0.58f
         val rightW = contentW - gap - leftW
@@ -1071,10 +1309,14 @@ object CollageGenerator {
             val y = k * (tileH + gap)
             slots += RectF(leftW + gap, y, contentW, y + tileH)
         }
+        if ((seed and 1) == 1) {
+            // Feature photo on the right
+            return LayoutResult(slots.map { RectF(contentW - it.right, it.top, contentW - it.left, it.bottom) }, h)
+        }
         return LayoutResult(slots, h)
     }
 
-    private fun stripSlots(sources: List<Source>, contentW: Float, gap: Float): LayoutResult {
+    private fun storySlots(sources: List<Source>, contentW: Float, gap: Float): LayoutResult {
         val slots = ArrayList<RectF>(sources.size)
         var y = 0f
         for (src in sources) {
@@ -1085,27 +1327,194 @@ object CollageGenerator {
         return LayoutResult(slots, y - gap)
     }
 
+    /**
+     * Moodboard: the canvas is cut again and again on a fine grid at random positions, which
+     * gives a few big tiles and many small ones, tightly packed. Photos fill the tiles in reading
+     * order, and the best of 40 candidates (tiles that suit the photos' shapes) is kept.
+     * With [overlap] the tiles grow into each other and tilt slightly, for a layered paper look.
+     */
+    private fun moodboardSlots(
+        sources: List<Source>,
+        contentW: Float,
+        gap: Float,
+        seed: Int,
+        ratio: Float,
+        overlap: Boolean
+    ): LayoutResult {
+        val n = sources.size
+        val cols = when {
+            n <= 12 -> 12
+            n <= 24 -> 18
+            else -> 24
+        }
+        val rows = (cols * ratio).roundToInt().coerceAtLeast(6)
+        val h = contentW * ratio
+        val uw = contentW / cols
+        val uh = h / rows
+        val asp = sources.map { it.aspect.coerceIn(0.5f, 2f) }
+        // Positive = tiles shrink (flat gap), negative = tiles grow (overlap)
+        val inset = if (overlap) -(contentW * 0.015f) else gap / 2f
+        val limit = ln(2.8f)
+
+        var best: List<RectF>? = null
+        var bestScore = Float.MAX_VALUE
+        for (attempt in 0 until 40) {
+            val rng = Random(seed.toLong() * 1_000_003L + attempt)
+            val cells = guillotine(n, cols, rows, uw / uh, rng)
+            if (cells.size != n) continue
+            cells.sortWith(compareBy<IntArray>({ it[1] }, { it[0] }))
+
+            var score = 0f
+            val rects = ArrayList<RectF>(n)
+            for (i in 0 until n) {
+                val c = cells[i]
+                val tw = (c[2] - c[0]) * uw
+                val th = (c[3] - c[1]) * uh
+                val tileAspect = tw / th
+                score += abs(ln(tileAspect / asp[i]))
+                val extreme = abs(ln(tileAspect))
+                if (extreme > limit) score += (extreme - limit) * 3f
+
+                rects += RectF(
+                    c[0] * uw + (if (c[0] > 0) inset else 0f),
+                    c[1] * uh + (if (c[1] > 0) inset else 0f),
+                    c[2] * uw - (if (c[2] < cols) inset else 0f),
+                    c[3] * uh - (if (c[3] < rows) inset else 0f)
+                )
+            }
+            score /= n
+            if (score < bestScore) {
+                bestScore = score
+                best = rects
+            }
+        }
+        val result = best ?: return smartSlots(sources, contentW, gap, seed, ratio)
+
+        val angles = if (overlap) {
+            val rng = Random(seed.toLong() * 977L + 5)
+            List(n) { (rng.nextFloat() * 2f - 1f) * 1.8f }
+        } else null
+        return LayoutResult(result, h, null, angles)
+    }
+
+    /** Splits a [cols] x [rows] grid into exactly [n] rectangles; each cell is [c0, r0, c1, r1]. */
+    private fun guillotine(n: Int, cols: Int, rows: Int, cellAspect: Float, rng: Random): MutableList<IntArray> {
+        for (minU in intArrayOf(2, 1)) {
+            val rects = mutableListOf(intArrayOf(0, 0, cols, rows))
+            var guard = 0
+            while (rects.size < n && guard++ < 2000) {
+                val cand = rects.indices.filter {
+                    val r = rects[it]
+                    (r[2] - r[0]) >= 2 * minU || (r[3] - r[1]) >= 2 * minU
+                }
+                if (cand.isEmpty()) break
+
+                // Bigger rectangles are more likely to be cut
+                var total = 0f
+                val weights = cand.map { idx ->
+                    val r = rects[idx]
+                    val wgt = ((r[2] - r[0]) * (r[3] - r[1])).toFloat() * (0.6f + rng.nextFloat())
+                    total += wgt
+                    wgt
+                }
+                var pick = rng.nextFloat() * total
+                var chosen = cand.last()
+                for (k in cand.indices) {
+                    pick -= weights[k]
+                    if (pick <= 0f) {
+                        chosen = cand[k]
+                        break
+                    }
+                }
+
+                val r = rects.removeAt(chosen)
+                val w = r[2] - r[0]
+                val h = r[3] - r[1]
+                val canSide = w >= 2 * minU
+                val canStack = h >= 2 * minU
+                val sideBySide = if (canSide && canStack) {
+                    val wide = w * cellAspect >= h
+                    if (rng.nextFloat() < 0.78f) wide else !wide
+                } else canSide
+
+                val len = if (sideBySide) w else h
+                val f = if (rng.nextFloat() < 0.25f) 0.2f + 0.6f * rng.nextFloat() else 0.32f + 0.36f * rng.nextFloat()
+                val pos = (len * f).roundToInt().coerceIn(minU, len - minU)
+                if (sideBySide) {
+                    rects += intArrayOf(r[0], r[1], r[0] + pos, r[3])
+                    rects += intArrayOf(r[0] + pos, r[1], r[2], r[3])
+                } else {
+                    rects += intArrayOf(r[0], r[1], r[2], r[1] + pos)
+                    rects += intArrayOf(r[0], r[1] + pos, r[2], r[3])
+                }
+            }
+            if (rects.size >= n) return rects
+        }
+        return mutableListOf()
+    }
+
+    /**
+     * Scrapbook: rows of two prints, then one wide print, and so on. Every print is tilted and
+     * overlaps its neighbours a little; the variation changes with the seed.
+     */
+    private fun scrapbookSlots(n: Int, contentW: Float, seed: Int): LayoutResult {
+        val rng = Random(seed.toLong() * 7_919L + 3)
+        val slots = ArrayList<RectF>(n)
+        val angles = ArrayList<Float>(n)
+        fun tilt(): Float = (1.2f + rng.nextFloat() * 3.2f) * (if (rng.nextBoolean()) 1f else -1f)
+
+        var i = 0
+        var rowY = 0f
+        var bottom = 0f
+        var pairRow = true
+        while (i < n) {
+            if (pairRow && n - i >= 2) {
+                val w = contentW * 0.52f
+                val h = w * 1.2f
+                for (k in 0..1) {
+                    val x = if (k == 0) rng.nextFloat() * contentW * 0.03f
+                    else contentW - w - rng.nextFloat() * contentW * 0.03f
+                    val y = max(rowY + (rng.nextFloat() - 0.5f) * h * 0.08f, 0f)
+                    slots += RectF(x, y, x + w, y + h)
+                    angles += tilt()
+                    bottom = max(bottom, y + h)
+                }
+                rowY += h * 0.86f
+                i += 2
+            } else {
+                val w = contentW * 0.82f
+                val h = w * 0.72f
+                val x = ((contentW - w) / 2f + (rng.nextFloat() - 0.5f) * contentW * 0.06f).coerceIn(0f, contentW - w)
+                val y = max(rowY + (rng.nextFloat() - 0.5f) * h * 0.06f, 0f)
+                slots += RectF(x, y, x + w, y + h)
+                angles += tilt()
+                bottom = max(bottom, y + h)
+                rowY += h * 0.86f
+                i += 1
+            }
+            pairRow = !pairRow
+        }
+        return LayoutResult(slots, bottom, null, angles)
+    }
+
     // ---------------------------------------------------------------------
     // Drawing helpers
     // ---------------------------------------------------------------------
 
-    /** Outline of [shape] fitted into [r]. [corner] only applies to RECT. */
+    /** Outline of [shape] fitted into [r]. [corner] is the radius of the square corners. */
     private fun shapePath(shape: TileShape, r: RectF, corner: Float): Path {
         val path = Path()
         when (shape) {
             TileShape.RECT -> path.addRoundRect(r, corner, corner, Path.Direction.CW)
-            TileShape.CIRCLE ->
-                path.addCircle(r.centerX(), r.centerY(), min(r.width(), r.height()) / 2f, Path.Direction.CW)
-            TileShape.HEXAGON -> {
-                // Pointy-top hexagon inscribed in the rectangle
-                val q = r.height() / 4f
-                path.moveTo(r.centerX(), r.top)
-                path.lineTo(r.right, r.top + q)
-                path.lineTo(r.right, r.bottom - q)
-                path.lineTo(r.centerX(), r.bottom)
-                path.lineTo(r.left, r.bottom - q)
-                path.lineTo(r.left, r.top + q)
-                path.close()
+            TileShape.ARCH -> {
+                // Fully rounded top, small corners at the bottom
+                val top = min(r.width() / 2f, r.height() / 2f)
+                val bottom = min(corner, top)
+                path.addRoundRect(
+                    r,
+                    floatArrayOf(top, top, top, top, bottom, bottom, bottom, bottom),
+                    Path.Direction.CW
+                )
             }
         }
         return path
@@ -1133,7 +1542,7 @@ object CollageGenerator {
     }
 
     /**
-     * Cover-crop the bitmap into [dst] with anti-aliased rounded corners.
+     * Cover-crop the bitmap into [dst] with anti-aliased edges.
      * [zoom] >= 1 magnifies; [panX]/[panY] in -1..1 choose which part stays visible (0 = centered).
      */
     private fun drawCover(
@@ -1169,6 +1578,184 @@ object CollageGenerator {
 
     private fun luminance(c: Int): Float =
         (0.299f * Color.red(c) + 0.587f * Color.green(c) + 0.114f * Color.blue(c)) / 255f
+
+    /** Ripped paper outline around [r]: small random bites along every edge. Same seed = same tear. */
+    private fun tornPath(r: RectF, s: Float, rng: Random): Path {
+        val step = 7f * s
+        val amp = 5.5f * s
+        val path = Path()
+        var started = false
+
+        fun edge(x0: Float, y0: Float, x1: Float, y1: Float) {
+            val horizontal = y0 == y1
+            val len = abs(x1 - x0) + abs(y1 - y0)
+            val steps = max(2, (len / step).toInt())
+            for (k in 0..steps) {
+                val t = k.toFloat() / steps
+                val bite = if (rng.nextFloat() < 0.08f) 1.8f else 1f
+                val edgeFade = if (k == 0 || k == steps) 0.4f else 1f
+                val j = (rng.nextFloat() - 0.5f) * 2f * amp * bite * edgeFade
+                val px = x0 + (x1 - x0) * t + if (horizontal) 0f else j
+                val py = y0 + (y1 - y0) * t + if (horizontal) j else 0f
+                if (!started) {
+                    path.moveTo(px, py)
+                    started = true
+                } else {
+                    path.lineTo(px, py)
+                }
+            }
+        }
+        edge(r.left, r.top, r.right, r.top)
+        edge(r.right, r.top, r.right, r.bottom)
+        edge(r.right, r.bottom, r.left, r.bottom)
+        edge(r.left, r.bottom, r.left, r.top)
+        path.close()
+        return path
+    }
+
+    /** Washi tape across the top edge of a tile, or a push-pin on it. Drawn rotated with the tile. */
+    private fun drawDecor(canvas: Canvas, decor: CollageDecor, card: RectF, angle: Float, s: Float, seed: Int, index: Int) {
+        val rng = Random(seed.toLong() * 104_729L + index * 31L + 5L)
+        val pin = when (decor) {
+            CollageDecor.TAPE -> false
+            CollageDecor.PINS -> true
+            CollageDecor.MIXED -> index % 2 == 0
+            CollageDecor.NONE -> return
+        }
+
+        canvas.save()
+        if (angle != 0f) canvas.rotate(angle, card.centerX(), card.centerY())
+        val cx = card.centerX() + (rng.nextFloat() - 0.5f) * card.width() * 0.25f
+
+        if (!pin) {
+            val tw = min(card.width() * 0.34f, 190f * s)
+            val th = tw * 0.26f
+            val palette = intArrayOf(
+                0xCCE8D3B0.toInt(), 0xCCF2BFC8.toInt(), 0xCCBFD3B8.toInt(), 0xCCCFE0EC.toInt(), 0xCCF6E2A8.toInt()
+            )
+            val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = palette[rng.nextInt(palette.size)]
+                setShadowLayer(3f * s, 0f, 1.5f * s, 0x33000000)
+            }
+            val l = cx - tw / 2f
+            val r = cx + tw / 2f
+            val top = card.top - th / 2f
+            val bottom = card.top + th / 2f
+            val teeth = 4
+            val notch = 2.5f * s
+            val path = Path()
+            path.moveTo(l, top)
+            path.lineTo(r, top)
+            for (k in 1..teeth) path.lineTo(r + if (k % 2 == 1) notch else 0f, top + th * k / teeth)
+            path.lineTo(l, bottom)
+            for (k in 1..teeth) path.lineTo(l - if (k % 2 == 1) notch else 0f, bottom - th * k / teeth)
+            path.close()
+
+            canvas.save()
+            canvas.rotate((rng.nextFloat() - 0.5f) * 16f, cx, card.top)
+            canvas.drawPath(path, paint)
+            canvas.restore()
+        } else {
+            val rad = max(min(card.width() * 0.045f, 22f * s), 8f * s)
+            val py = card.top + rad * 1.6f
+            val tones = arrayOf(
+                intArrayOf(0xFFFFF2B0.toInt(), 0xFFE0B13A.toInt(), 0xFF9C7418.toInt()),
+                intArrayOf(0xFFFFB3A8.toInt(), 0xFFD93A2B.toInt(), 0xFF8E1F14.toInt()),
+                intArrayOf(0xFFBDE8E0.toInt(), 0xFF2FA394.toInt(), 0xFF176558.toInt())
+            )
+            val tone = tones[rng.nextInt(tones.size)]
+            val shadow = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0x40000000 }
+            canvas.drawCircle(cx + rad * 0.35f, py + rad * 0.55f, rad, shadow)
+            val body = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                shader = RadialGradient(
+                    cx - rad * 0.35f, py - rad * 0.35f, rad * 1.4f,
+                    tone, floatArrayOf(0f, 0.55f, 1f), Shader.TileMode.CLAMP
+                )
+            }
+            canvas.drawCircle(cx, py, rad, body)
+            val shine = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0x99FFFFFF.toInt() }
+            canvas.drawCircle(cx - rad * 0.32f, py - rad * 0.34f, rad * 0.22f, shine)
+        }
+        canvas.restore()
+    }
+
+    /** Procedural paper texture (speckles, fibres, weave) plus a soft vignette. */
+    private fun drawTexture(canvas: Canvas, tex: CollageTexture, w: Float, h: Float, s: Float) {
+        if (tex == CollageTexture.NONE) return
+        val rng = Random(20240611L)
+        val p = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeCap = Paint.Cap.ROUND
+        }
+        // Density is defined per 1080 x 1080 px of design space, so previews look like exports
+        val area = (w / s) * (h / s) / (1080f * 1080f)
+
+        fun dots(count: Int, size: Float, color: Int) {
+            val pts = FloatArray(count * 2)
+            for (i in 0 until count) {
+                pts[i * 2] = rng.nextFloat() * w
+                pts[i * 2 + 1] = rng.nextFloat() * h
+            }
+            p.strokeWidth = size
+            p.color = color
+            canvas.drawPoints(pts, p)
+        }
+
+        fun fibers(count: Int, minLen: Float, maxLen: Float, width: Float, color: Int) {
+            p.strokeWidth = width
+            p.color = color
+            for (i in 0 until count) {
+                val x = rng.nextFloat() * w
+                val y = rng.nextFloat() * h
+                val a = rng.nextFloat() * 6.2832f
+                val len = minLen + rng.nextFloat() * (maxLen - minLen)
+                canvas.drawLine(x, y, x + cos(a) * len, y + sin(a) * len, p)
+            }
+        }
+
+        when (tex) {
+            CollageTexture.PAPER -> {
+                dots((9000 * area).toInt(), 1.3f * s, 0x14604020)
+                dots((7000 * area).toInt(), 1.6f * s, 0x2EFFFFFF)
+                fibers((260 * area).toInt(), 8f * s, 26f * s, 0.9f * s, 0x16705030)
+            }
+            CollageTexture.KRAFT -> {
+                dots((16000 * area).toInt(), 1.5f * s, 0x2A5A3A18)
+                dots((9000 * area).toInt(), 1.8f * s, 0x30FFFFFF)
+                fibers((520 * area).toInt(), 10f * s, 34f * s, 1.1f * s, 0x2A5A3A18)
+                fibers((260 * area).toInt(), 8f * s, 28f * s, 1f * s, 0x33FFFFFF)
+            }
+            CollageTexture.LINEN -> {
+                p.strokeWidth = 1f * s
+                p.color = 0x0C000000
+                val step = 3f * s
+                var y = 0f
+                while (y < h) {
+                    canvas.drawLine(0f, y, w, y, p)
+                    y += step
+                }
+                var x = 0f
+                while (x < w) {
+                    canvas.drawLine(x, 0f, x, h, p)
+                    x += step
+                }
+                dots((6000 * area).toInt(), 1.4f * s, 0x1AFFFFFF)
+            }
+            CollageTexture.GRAIN -> {
+                dots((26000 * area).toInt(), 1.1f * s, 0x12000000)
+                dots((26000 * area).toInt(), 1.1f * s, 0x14FFFFFF)
+            }
+            CollageTexture.NONE -> Unit
+        }
+
+        val vignette = Paint().apply {
+            shader = RadialGradient(
+                w / 2f, h / 2f, max(w, h) * 0.75f,
+                intArrayOf(0x00000000, 0x00000000, 0x22000000), floatArrayOf(0f, 0.6f, 1f), Shader.TileMode.CLAMP
+            )
+        }
+        canvas.drawRect(0f, 0f, w, h, vignette)
+    }
 
     // ---------------------------------------------------------------------
     // Decoding (EXIF aware, sampled to the size actually needed)

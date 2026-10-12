@@ -13,6 +13,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -32,6 +33,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -43,11 +45,12 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DriveFileMove
 import androidx.compose.material.icons.filled.GridView
@@ -63,6 +66,8 @@ import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -73,7 +78,12 @@ import androidx.compose.material3.InputChip
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.RadioButton
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextField
@@ -91,10 +101,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
@@ -102,6 +114,7 @@ import androidx.compose.ui.input.pointer.positionChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.navigation.NavHostController
@@ -120,12 +133,9 @@ import com.acoder.gallery.domain.model.MediaItem
 import com.acoder.gallery.domain.model.PdfPageSize
 import com.acoder.gallery.domain.model.PdfQuality
 import com.acoder.gallery.domain.model.SortOrder
-import com.acoder.gallery.presentation.common.BarAction
 import com.acoder.gallery.presentation.common.CircleButton
 import com.acoder.gallery.presentation.common.EmptyState
-import com.acoder.gallery.presentation.common.FloatingActionPill
 import com.acoder.gallery.presentation.common.FloatingBarClearance
-import com.acoder.gallery.presentation.common.GalleryDialog
 import com.acoder.gallery.presentation.common.LargeTitle
 import com.acoder.gallery.presentation.common.MediaBadge
 import com.acoder.gallery.presentation.common.MediaThumb
@@ -136,6 +146,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 
 /** "Delete this photo?" / "Delete this video?" / "Delete 5 items?" */
 fun deleteTitle(items: List<MediaItem>): String = when {
@@ -249,9 +260,9 @@ fun MediaScreen(vm: HomeViewModel, nav: NavHostController, isAlbum: Boolean = fa
                         color = MaterialTheme.colorScheme.onBackground
                     )
 
-                   /*********************************************************************************************
-                    *************** when line exceed more than 1  fontSize will be changed to 24sp  *************
-                    *********************************************************************************************/
+                    /*********************************************************************************************
+                     *************** when line exceed more than 1  fontSize will be changed to 24sp  *************
+                     *********************************************************************************************/
 
                     /* val title = if (isAlbum) albumName.orEmpty() else "Photos"
                     // Reset whenever the title changes
@@ -363,16 +374,17 @@ fun MediaScreen(vm: HomeViewModel, nav: NavHostController, isAlbum: Boolean = fa
             exit = slideOutVertically { it } + fadeOut()
         ) {
             val allFavorite = selectedItems.isNotEmpty() && selectedItems.all { it.isFavorite }
-            FloatingActionPill(
-                listOf(
-                    BarAction(Icons.Default.Share, "Share", {
-                        MediaShareManager.share(context, selectedItems.map { it.uri }, selectedItems.firstOrNull()?.mimeType ?: "*/*")
-                    }),
-                    BarAction(if (allFavorite) Icons.Default.Star else Icons.Default.StarBorder, "Favourite", { vm.toggleFavorite(selectedItems) }),
-                    BarAction(Icons.Default.PictureAsPdf, "PDF", { pdfConfirm = true }),
-                    BarAction(Icons.Default.Delete, "Delete", { deleteConfirm = true }),
-                    BarAction(Icons.Default.MoreHoriz, "More", { moreOpen = true })
-                )
+            SelectionActionBar(
+                isFavorite = allFavorite,
+                onShare = {
+                    MediaShareManager.share(
+                        context, selectedItems.map { it.uri }, selectedItems.firstOrNull()?.mimeType ?: "*/*"
+                    )
+                },
+                onFavorite = { vm.toggleFavorite(selectedItems) },
+                onPdf = { pdfConfirm = true },
+                onDelete = { deleteConfirm = true },
+                onMore = { moreOpen = true }
             )
         }
     }
@@ -380,47 +392,24 @@ fun MediaScreen(vm: HomeViewModel, nav: NavHostController, isAlbum: Boolean = fa
     // ---------------- Dialogs & sheets ----------------
 
     if (deleteConfirm && selectedItems.isNotEmpty()) {
-        GalleryDialog(
+        DeleteConfirmDialog(
             title = deleteTitle(selectedItems),
             message = deleteMessage(selectedItems, vm.trashSupported),
-            confirmLabel = "Delete",
             onDismiss = { deleteConfirm = false },
             onConfirm = { deleteConfirm = false; vm.moveToTrash(selectedItems) }
         )
     }
 
     if (pdfConfirm) {
-        var pageSize by remember { mutableStateOf(PdfPageSize.A4) }
-        var pdfQuality by remember { mutableStateOf(PdfQuality.HIGH) }
-        AlertDialog(
-            onDismissRequest = { pdfConfirm = false },
-            title = { Text("Create PDF") },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Text("${selectedItems.count { !it.isVideo }} selected photo(s) will be combined into one PDF, saved to Downloads and shared.")
-                    Text("Page size", style = MaterialTheme.typography.titleSmall)
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        PdfPageSize.entries.forEach { size ->
-                            FilterChip(selected = pageSize == size, onClick = { pageSize = size }, label = { Text(size.label) })
-                        }
-                    }
-                    Text("Quality", style = MaterialTheme.typography.titleSmall)
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        PdfQuality.entries.forEach { q ->
-                            FilterChip(selected = pdfQuality == q, onClick = { pdfQuality = q }, label = { Text(q.label) })
-                        }
-                    }
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    pdfConfirm = false
-                    val chosen = selectedItems.filter { !it.isVideo }
-                    if (chosen.isEmpty()) vm.notify("Select at least one photo to make a PDF")
-                    else vm.createPdf(context, chosen, pageSize, pdfQuality)
-                }) { Text("Create") }
-            },
-            dismissButton = { TextButton({ pdfConfirm = false }) { Text("Cancel") } }
+        PdfOptionsSheet(
+            photoCount = selectedItems.count { !it.isVideo },
+            onDismiss = { pdfConfirm = false },
+            onCreate = { pageSize, quality ->
+                pdfConfirm = false
+                val chosen = selectedItems.filter { !it.isVideo }
+                if (chosen.isEmpty()) vm.notify("Select at least one photo to make a PDF")
+                else vm.createPdf(context, chosen, pageSize, quality)
+            }
         )
     }
 
@@ -462,26 +451,265 @@ fun MediaScreen(vm: HomeViewModel, nav: NavHostController, isAlbum: Boolean = fa
         }
     }
 
-    if (moreOpen) AlertDialog(
-        onDismissRequest = { moreOpen = false },
-        title = { Text("${selectedItems.size} selected") },
-        text = {
-            Column {
-                TextButton({ moreOpen = false; collageConfirm = true }, Modifier.fillMaxWidth()) {
-                    Icon(Icons.Default.GridView, null); Spacer(Modifier.width(8.dp)); Text("Create collage", Modifier.weight(1f))
-                }
-                TextButton({ moveMode = "copy"; moreOpen = false; treeLauncher.launch(null) }, Modifier.fillMaxWidth()) {
-                    Icon(Icons.Default.DriveFileMove, null); Spacer(Modifier.width(8.dp)); Text("Copy to folder", Modifier.weight(1f))
-                }
-                TextButton({ moveMode = "move"; moreOpen = false; treeLauncher.launch(null) }, Modifier.fillMaxWidth()) {
-                    Icon(Icons.Default.DriveFileMove, null); Spacer(Modifier.width(8.dp)); Text("Move to folder", Modifier.weight(1f))
-                }
-            }
-        },
-        confirmButton = { TextButton({ moreOpen = false }) { Text("Close") } }
-    )
+    if (moreOpen) {
+        MoreActionsSheet(
+            count = selectedItems.size,
+            onDismiss = { moreOpen = false },
+            onCollage = { moreOpen = false; collageConfirm = true },
+            onCopy = { moveMode = "copy"; moreOpen = false; treeLauncher.launch(null) },
+            onMove = { moveMode = "move"; moreOpen = false; treeLauncher.launch(null) }
+        )
+    }
 
     if (sortSheetOpen) SortFilterSheet(vm, onDismiss = { vm.sortSheetOpen.value = false })
+}
+
+// =========================================================================
+// Selection bar
+// =========================================================================
+
+@Composable
+private fun SelectionActionBar(
+    isFavorite: Boolean,
+    onShare: () -> Unit,
+    onFavorite: () -> Unit,
+    onPdf: () -> Unit,
+    onDelete: () -> Unit,
+    onMore: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        modifier = modifier
+            .navigationBarsPadding()
+            .padding(horizontal = 16.dp, vertical = 12.dp)
+            .fillMaxWidth(),
+        shape = RoundedCornerShape(28.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        tonalElevation = 3.dp,
+        shadowElevation = 10.dp
+    ) {
+        Row(
+            Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+            horizontalArrangement = Arrangement.SpaceEvenly,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            BarItem(Icons.Default.Share, "Share", onShare, Modifier.weight(1f))
+            BarItem(
+                if (isFavorite) Icons.Default.Star else Icons.Default.StarBorder,
+                "Favourite",
+                onFavorite,
+                Modifier.weight(1f),
+                tint = if (isFavorite) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+            )
+            BarItem(Icons.Default.PictureAsPdf, "PDF", onPdf, Modifier.weight(1f))
+            BarItem(
+                Icons.Default.Delete, "Delete", onDelete, Modifier.weight(1f),
+                tint = MaterialTheme.colorScheme.error
+            )
+            BarItem(Icons.Default.MoreHoriz, "More", onMore, Modifier.weight(1f))
+        }
+    }
+}
+
+@Composable
+private fun BarItem(
+    icon: ImageVector,
+    label: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    tint: Color = MaterialTheme.colorScheme.onSurface
+) {
+    Column(
+        modifier
+            .clip(RoundedCornerShape(20.dp))
+            .clickable(onClick = onClick)
+            .padding(vertical = 8.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(3.dp)
+    ) {
+        Icon(icon, contentDescription = label, tint = tint, modifier = Modifier.size(24.dp))
+        Text(label, fontSize = 11.sp, fontWeight = FontWeight.Medium, color = tint, maxLines = 1)
+    }
+}
+
+// =========================================================================
+// Delete dialog
+// =========================================================================
+
+@Composable
+private fun DeleteConfirmDialog(
+    title: String,
+    message: String,
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        shape = RoundedCornerShape(28.dp),
+        icon = {
+            Box(
+                Modifier.size(56.dp).clip(CircleShape).background(MaterialTheme.colorScheme.errorContainer),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(Icons.Default.Delete, null, tint = MaterialTheme.colorScheme.onErrorContainer)
+            }
+        },
+        title = { Text(title, fontWeight = FontWeight.SemiBold, textAlign = TextAlign.Center) },
+        text = {
+            Text(
+                message,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth()
+            )
+        },
+        confirmButton = {
+            Button(
+                onClick = onConfirm,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.error,
+                    contentColor = MaterialTheme.colorScheme.onError
+                )
+            ) { Text("Delete") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
+    )
+}
+
+// =========================================================================
+// Sheets
+// =========================================================================
+
+@Composable
+private fun SheetHeader(icon: ImageVector, title: String, subtitle: String) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Box(
+            Modifier.size(48.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primaryContainer),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(icon, null, tint = MaterialTheme.colorScheme.onPrimaryContainer)
+        }
+        Spacer(Modifier.width(16.dp))
+        Column {
+            Text(title, fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
+            Text(subtitle, fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+}
+
+@Composable
+private fun PdfOptionsSheet(
+    photoCount: Int,
+    onDismiss: () -> Unit,
+    onCreate: (PdfPageSize, PdfQuality) -> Unit
+) {
+    var pageSize by remember { mutableStateOf(PdfPageSize.A4) }
+    var quality by remember { mutableStateOf(PdfQuality.HIGH) }
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    ) {
+        Column(
+            Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = 24.dp).padding(bottom = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(20.dp)
+        ) {
+            SheetHeader(
+                Icons.Default.PictureAsPdf,
+                "Create PDF",
+                if (photoCount == 0) "No photos selected"
+                else "$photoCount photo${if (photoCount == 1) "" else "s"} · saved to Downloads and shared"
+            )
+
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Page size", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+                    val sizes = PdfPageSize.entries
+                    sizes.forEachIndexed { i, size ->
+                        SegmentedButton(
+                            selected = pageSize == size,
+                            onClick = { pageSize = size },
+                            shape = SegmentedButtonDefaults.itemShape(i, sizes.size)
+                        ) { Text(size.label) }
+                    }
+                }
+            }
+
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Quality", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+                    val qualities = PdfQuality.entries
+                    qualities.forEachIndexed { i, q ->
+                        SegmentedButton(
+                            selected = quality == q,
+                            onClick = { quality = q },
+                            shape = SegmentedButtonDefaults.itemShape(i, qualities.size)
+                        ) { Text(q.label) }
+                    }
+                }
+            }
+
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                OutlinedButton(onClick = onDismiss, modifier = Modifier.weight(1f).height(48.dp)) { Text("Cancel") }
+                Button(
+                    onClick = { onCreate(pageSize, quality) },
+                    enabled = photoCount > 0,
+                    modifier = Modifier.weight(1f).height(48.dp)
+                ) { Text("Create PDF") }
+            }
+        }
+    }
+}
+
+@Composable
+private fun MoreActionsSheet(
+    count: Int,
+    onDismiss: () -> Unit,
+    onCollage: () -> Unit,
+    onCopy: () -> Unit,
+    onMove: () -> Unit
+) {
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    ) {
+        Column(Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = 12.dp).padding(bottom = 16.dp)) {
+            Text(
+                "$count selected",
+                Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
+                fontSize = 20.sp,
+                fontWeight = FontWeight.SemiBold
+            )
+            Spacer(Modifier.height(8.dp))
+            SheetActionRow(Icons.Default.GridView, "Create collage", "Combine photos into a single image", onCollage)
+            SheetActionRow(Icons.Default.ContentCopy, "Copy to folder", "Keep the originals where they are", onCopy)
+            SheetActionRow(Icons.Default.DriveFileMove, "Move to folder", "Transfer the originals to a new folder", onMove)
+        }
+    }
+}
+
+@Composable
+private fun SheetActionRow(icon: ImageVector, title: String, subtitle: String, onClick: () -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            Modifier.size(44.dp).clip(CircleShape).background(MaterialTheme.colorScheme.secondaryContainer),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(icon, null, tint = MaterialTheme.colorScheme.onSecondaryContainer)
+        }
+        Spacer(Modifier.width(16.dp))
+        Column(Modifier.weight(1f)) {
+            Text(title, fontSize = 16.sp, fontWeight = FontWeight.Medium)
+            Text(subtitle, fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
 }
 
 @Composable
@@ -729,7 +957,7 @@ private fun MediaGrid(
             when (row) {
                 is GridRow.Header -> Text(
                     row.label,
-                    Modifier.padding(start = 18.dp, end = 20.dp, top = 15.dp, bottom = 15.dp),
+                    Modifier.padding(start = 16.dp, end = 20.dp, top = 15.dp, bottom = 15.dp),
                     fontSize = 16.sp,
                     fontWeight = FontWeight.SemiBold,
                     color = MaterialTheme.colorScheme.onBackground

@@ -26,6 +26,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -34,25 +35,25 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Palette
+import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.Style
 import androidx.compose.material.icons.filled.TextFields
 import androidx.compose.material.icons.filled.Tune
-import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Slider
-import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -68,17 +69,21 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.RoundRect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
+import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.PointerEventPass
@@ -95,16 +100,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
-import com.acoder.gallery.core.collage.CollageBackground
-import com.acoder.gallery.core.collage.CollageConfig
-import com.acoder.gallery.core.collage.CollageFont
-import com.acoder.gallery.core.collage.CollageFrame
-import com.acoder.gallery.core.collage.CollageGenerator
-import com.acoder.gallery.core.collage.CollageLayout
-import com.acoder.gallery.core.collage.CollageText
-import com.acoder.gallery.core.collage.PhotoTransform
-import com.acoder.gallery.core.collage.TileShape
-import com.acoder.gallery.core.collage.TileInfo
+import com.acoder.gallery.presentation.common.AppSlider
 import com.acoder.gallery.presentation.common.CircleButton
 import kotlin.coroutines.cancellation.CancellationException
 import kotlin.math.abs
@@ -154,6 +150,11 @@ fun CollagePreviewDialog(
     var corner by remember { mutableStateOf<Int?>(null) }
     var columns by remember { mutableStateOf(CollageGenerator.defaultColumns(uris.size)) }
     var footer by remember { mutableStateOf(false) }
+    // Variation number for dynamic layouts; the Shuffle button bumps it.
+    var seed by remember { mutableStateOf(0) }
+    var canvasRatio by remember { mutableStateOf(CollageCanvas.AUTO) }
+    var texture by remember { mutableStateOf<CollageTexture?>(null) }
+    var decor by remember { mutableStateOf<CollageDecor?>(null) }
     val textState = remember { mutableStateOf(CollageText()) }
     var tab by remember { mutableStateOf(EditorTab.LAYOUT) }
 
@@ -188,6 +189,10 @@ fun CollagePreviewDialog(
         footer = footer,
         order = order,
         transforms = xforms.toMap(),
+        seed = seed,
+        canvas = canvasRatio,
+        texture = texture,
+        decor = decor,
         text = if (withText) textState.value.takeIf { it.text.isNotBlank() } else null
     )
 
@@ -204,7 +209,7 @@ fun CollagePreviewDialog(
 
     // Re-render the photos when anything except the text changes. Nothing renders while a
     // finger is down on a photo (the live overlay covers that); one render runs when it lifts.
-    LaunchedEffect(layout, frame, background, spacing, corner, columns, footer, order, xformVersion, gesturing) {
+    LaunchedEffect(layout, frame, background, spacing, corner, columns, footer, order, seed, canvasRatio, texture, decor, xformVersion, gesturing) {
         if (gesturing) return@LaunchedEffect
         loading = true
         delay(80)
@@ -544,9 +549,21 @@ fun CollagePreviewDialog(
                         .padding(top = 8.dp, bottom = 12.dp)
                 ) {
                     when (tab) {
-                        EditorTab.LAYOUT -> LayoutPanel(layout, { layout = it }, columns, { columns = it }, uris.size)
+                        EditorTab.LAYOUT -> LayoutPanel(
+                            layout = layout,
+                            onLayout = { layout = it },
+                            columns = columns,
+                            onColumns = { columns = it },
+                            count = uris.size,
+                            onShuffle = { seed++ },
+                            canvas = canvasRatio,
+                            onCanvas = { canvasRatio = it }
+                        )
                         EditorTab.STYLE -> StylePanel(frame) { frame = it }
-                        EditorTab.BACKGROUND -> BackgroundPanel(background, autoBackground) { background = it }
+                        EditorTab.BACKGROUND -> BackgroundPanel(
+                            background, autoBackground,
+                            texture = texture, frame = frame, onTexture = { texture = it }
+                        ) { background = it }
                         EditorTab.TEXT -> TextPanel(textState, ink)
                         EditorTab.ADJUST -> AdjustPanel(
                             frame = frame,
@@ -554,12 +571,15 @@ fun CollagePreviewDialog(
                             onSpacing = { spacing = it },
                             corner = corner,
                             onCorner = { corner = it },
+                            decor = decor,
+                            onDecor = { decor = it },
                             footer = footer,
                             onFooter = { footer = it },
                             onReset = {
                                 spacing = null
                                 corner = null
                                 footer = false
+                                decor = null
                                 xforms.clear()
                                 xformVersion++
                                 order = uris.indices.toList()
@@ -637,7 +657,7 @@ private fun hitTile(tiles: List<TileInfo>, fx: Float, fy: Float, bmpW: Int, bmpH
     tiles.forEachIndexed { i, t ->
         val c = t.card
         if (x >= c.left && x <= c.right && y >= c.top && y <= c.bottom) {
-            // Bounding boxes of round / hexagon tiles overlap: prefer the nearest centre
+            // Tilted or overlapping cards: prefer the nearest centre
             val dx = x - c.centerX()
             val dy = y - c.centerY()
             val d = dx * dx + dy * dy
@@ -660,10 +680,13 @@ private fun LayoutPanel(
     onLayout: (CollageLayout) -> Unit,
     columns: Int,
     onColumns: (Int) -> Unit,
-    count: Int
+    count: Int,
+    onShuffle: () -> Unit,
+    canvas: CollageCanvas,
+    onCanvas: (CollageCanvas) -> Unit
 ) {
     val options = remember(count) { CollageGenerator.layoutsFor(count) }
-    val maxCols = minOf(4, count)
+    val maxCols = if (layout == CollageLayout.STAGGER) minOf(4, maxOf(2, count / 2)) else minOf(4, count)
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text(
             if (count == 1) "1 photo" else "Layouts for $count photos",
@@ -679,9 +702,26 @@ private fun LayoutPanel(
                 LayoutThumb(option, count, columns, selected = option == layout) { onLayout(option) }
             }
         }
-        if ((layout == CollageLayout.GRID || layout == CollageLayout.MASONRY || layout == CollageLayout.DOTS) &&
-            maxCols >= 3
-        ) {
+        if (CollageGenerator.usesSeed(layout)) {
+            TextButton(onClick = onShuffle, modifier = Modifier.padding(horizontal = 8.dp)) {
+                Icon(Icons.Default.Shuffle, null, Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("Shuffle layout")
+            }
+        }
+        if (CollageGenerator.usesCanvas(layout)) {
+            Row(
+                Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("Canvas", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                CollageCanvas.entries.forEach { c ->
+                    FilterChip(selected = c == canvas, onClick = { onCanvas(c) }, label = { Text(c.label) })
+                }
+            }
+        }
+        if (CollageGenerator.usesColumns(layout) && maxCols >= 3) {
             LabeledSlider(
                 label = "Columns",
                 value = columns.toFloat(),
@@ -698,38 +738,44 @@ private fun LayoutThumb(layout: CollageLayout, count: Int, columns: Int, selecte
     val tint = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
     val outline = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant
     val rects = remember(layout, count, columns) { CollageGenerator.thumbRects(layout, count, columns) }
+    val separator = MaterialTheme.colorScheme.surfaceContainerHigh
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         Canvas(
             Modifier
-                .size(60.dp)
-                .clip(RoundedCornerShape(14.dp))
+                .size(64.dp)
+                .clip(RoundedCornerShape(16.dp))
                 .background(MaterialTheme.colorScheme.surfaceContainerHigh)
-                .border(BorderStroke(if (selected) 2.5.dp else 1.dp, outline), RoundedCornerShape(14.dp))
+                .border(BorderStroke(if (selected) 2.5.dp else 1.dp, outline), RoundedCornerShape(16.dp))
                 .clickable(onClick = onClick)
         ) {
-            val pad = 10.dp.toPx()
+            val pad = 11.dp.toPx()
             val iw = size.width - pad * 2
             val ih = size.height - pad * 2
-            val radius = CornerRadius(2.dp.toPx())
+            val radius = CornerRadius(2.5.dp.toPx())
             rects.forEach { t ->
                 val r = t.rect
                 val topLeft = Offset(pad + r[0] * iw, pad + r[1] * ih)
                 val sz = Size(r[2] * iw, r[3] * ih)
-                when (t.shape) {
-                    TileShape.RECT -> drawRoundRect(tint, topLeft, sz, radius)
-                    TileShape.CIRCLE -> drawOval(tint, topLeft, sz)
-                    TileShape.HEXAGON -> {
-                        val q = sz.height / 4f
-                        val path = Path().apply {
-                            moveTo(topLeft.x + sz.width / 2f, topLeft.y)
-                            lineTo(topLeft.x + sz.width, topLeft.y + q)
-                            lineTo(topLeft.x + sz.width, topLeft.y + sz.height - q)
-                            lineTo(topLeft.x + sz.width / 2f, topLeft.y + sz.height)
-                            lineTo(topLeft.x, topLeft.y + sz.height - q)
-                            lineTo(topLeft.x, topLeft.y + q)
-                            close()
+                rotate(t.angle, Offset(topLeft.x + sz.width / 2f, topLeft.y + sz.height / 2f)) {
+                    when (t.shape) {
+                        TileShape.RECT -> {
+                            drawRoundRect(tint, topLeft, sz, radius)
+                            // A thin outline keeps overlapping tiles readable
+                            drawRoundRect(separator, topLeft, sz, radius, style = Stroke(1.2.dp.toPx()))
                         }
-                        drawPath(path, tint)
+                        TileShape.ARCH -> {
+                            val top = minOf(sz.width / 2f, sz.height / 2f)
+                            val path = Path().apply {
+                                addRoundRect(
+                                    RoundRect(
+                                        topLeft.x, topLeft.y, topLeft.x + sz.width, topLeft.y + sz.height,
+                                        CornerRadius(top), CornerRadius(top),
+                                        CornerRadius(1.dp.toPx()), CornerRadius(1.dp.toPx())
+                                    )
+                                )
+                            }
+                            drawPath(path, tint)
+                        }
                     }
                 }
             }
@@ -759,55 +805,141 @@ private fun StylePanel(frame: CollageFrame, onFrame: (CollageFrame) -> Unit) {
     }
 }
 
+/** A tiny 2x2 collage drawn in the style itself, so the swatch shows what you will get. */
 @Composable
 private fun FrameSwatch(frame: CollageFrame, selected: Boolean, onClick: () -> Unit) {
     val outline = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant
-    val shape = RoundedCornerShape(14.dp)
+    val shape = RoundedCornerShape(16.dp)
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         Box(
             Modifier
-                .size(64.dp)
+                .size(76.dp)
                 .clip(shape)
                 .border(BorderStroke(if (selected) 2.5.dp else 1.dp, outline), shape)
-                .clickable(onClick = onClick),
-            contentAlignment = Alignment.Center
+                .clickable(onClick = onClick)
         ) {
             GradientBox(CollageGenerator.defaultBackground(frame), Modifier.fillMaxSize())
-            val photo = Color(0xFF9DB4D3)
-            when (frame) {
-                CollageFrame.POLAROID -> Box(
-                    Modifier.size(width = 32.dp, height = 38.dp).background(Color(0xFFFDFCF8)),
-                    contentAlignment = Alignment.TopCenter
-                ) { Box(Modifier.padding(top = 3.dp).size(26.dp).background(photo)) }
-
-                CollageFrame.MATTED -> Box(
-                    Modifier.size(36.dp).clip(RoundedCornerShape(8.dp)).background(Color.White),
-                    contentAlignment = Alignment.Center
-                ) { Box(Modifier.size(28.dp).clip(RoundedCornerShape(5.dp)).background(photo)) }
-
-                CollageFrame.GLASS -> Box(
-                    Modifier
-                        .size(38.dp)
-                        .clip(RoundedCornerShape(10.dp))
-                        .background(Color.White.copy(alpha = 0.28f))
-                        .border(1.dp, Color.White.copy(alpha = 0.6f), RoundedCornerShape(10.dp)),
-                    contentAlignment = Alignment.Center
-                ) { Box(Modifier.size(26.dp).clip(RoundedCornerShape(6.dp)).background(photo)) }
-
-                CollageFrame.FILM -> Box(
-                    Modifier.size(width = 40.dp, height = 32.dp).clip(RoundedCornerShape(3.dp)).background(Color(0xFF111111)),
-                    contentAlignment = Alignment.Center
-                ) { Box(Modifier.size(width = 26.dp, height = 24.dp).background(photo)) }
-
-                CollageFrame.EDITORIAL -> Box(Modifier.size(34.dp).background(photo))
-                else -> Box(Modifier.size(34.dp).clip(RoundedCornerShape(8.dp)).background(photo))
-            }
+            Canvas(Modifier.fillMaxSize()) { drawFrameMini(frame) }
         }
         Text(
             frame.label,
             Modifier.padding(top = 4.dp),
             fontSize = 12.sp,
             fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal
+        )
+    }
+}
+
+private val SWATCH_PHOTOS = listOf(
+    listOf(Color(0xFF6FA8F0), Color(0xFFB9D7FA)),
+    listOf(Color(0xFFF2985F), Color(0xFFF9D2AE)),
+    listOf(Color(0xFF6CC196), Color(0xFFC4EBD2)),
+    listOf(Color(0xFFA98BE0), Color(0xFFDCCBF5))
+)
+
+private fun DrawScope.drawFrameMini(frame: CollageFrame) {
+    val w = size.width
+    val pad = w * (if (frame == CollageFrame.EDITORIAL) 0.22f else 0.15f)
+    val gap = w * when (frame) {
+        CollageFrame.GALLERY, CollageFrame.INSTANT, CollageFrame.SCRAPBOOK -> 0.10f
+        CollageFrame.FLOAT, CollageFrame.STICKER, CollageFrame.SOFT -> 0.09f
+        else -> 0.06f
+    }
+    val cell = (w - pad * 2 - gap) / 2f
+
+    val paper: Color? = when (frame) {
+        CollageFrame.SOFT, CollageFrame.FLOAT, CollageFrame.STICKER, CollageFrame.MINIMAL -> Color.White
+        CollageFrame.TORN -> Color(0xFFFBFAF6)
+        CollageFrame.GLASS -> Color.White.copy(alpha = 0.28f)
+        CollageFrame.GALLERY -> Color(0xFFFBFAF7)
+        CollageFrame.INSTANT, CollageFrame.SCRAPBOOK -> Color(0xFFFDFCF8)
+        else -> null
+    }
+    val cardCorner = cell * when (frame) {
+        CollageFrame.CLEAN -> 0.20f
+        CollageFrame.SOFT -> 0.30f
+        CollageFrame.NOIR -> 0.12f
+        CollageFrame.GALLERY -> 0.02f
+        CollageFrame.FLOAT -> 0.22f
+        CollageFrame.GLASS -> 0.26f
+        CollageFrame.EDITORIAL -> 0f
+        CollageFrame.STICKER -> 0.26f
+        CollageFrame.INSTANT -> 0.04f
+        CollageFrame.MINIMAL -> 0.03f
+        CollageFrame.SCRAPBOOK -> 0.04f
+        CollageFrame.TORN -> 0.02f
+    }
+    val mat = cell * when (frame) {
+        CollageFrame.FLOAT -> 0.07f
+        CollageFrame.GLASS -> 0.08f
+        CollageFrame.GALLERY -> 0.12f
+        CollageFrame.STICKER -> 0.10f
+        CollageFrame.INSTANT, CollageFrame.SCRAPBOOK -> 0.09f
+        CollageFrame.TORN -> 0.08f
+        else -> 0f
+    }
+    val bottomExtra = cell * when (frame) {
+        CollageFrame.INSTANT, CollageFrame.SCRAPBOOK -> 0.16f
+        CollageFrame.GALLERY -> 0.04f
+        else -> 0f
+    }
+    val shadow = frame == CollageFrame.SOFT || frame == CollageFrame.FLOAT || frame == CollageFrame.GALLERY ||
+            frame == CollageFrame.STICKER || frame == CollageFrame.INSTANT || frame == CollageFrame.MINIMAL ||
+            frame == CollageFrame.SCRAPBOOK || frame == CollageFrame.TORN
+
+    for (i in 0..3) {
+        val x = pad + (i % 2) * (cell + gap)
+        val y = pad + (i / 2) * (cell + gap)
+        val tilt = if (frame == CollageFrame.INSTANT || frame == CollageFrame.SCRAPBOOK) (if (i % 2 == 0) -3f else 2.5f) else 0f
+        rotate(tilt, Offset(x + cell / 2f, y + cell / 2f)) {
+            if (shadow) {
+                drawRoundRect(
+                    Color.Black.copy(alpha = 0.12f),
+                    Offset(x, y + w * 0.03f),
+                    Size(cell, cell),
+                    CornerRadius(cardCorner)
+                )
+            }
+            if (paper != null) {
+                drawRoundRect(paper, Offset(x, y), Size(cell, cell), CornerRadius(cardCorner))
+                if (frame == CollageFrame.GLASS) {
+                    drawRoundRect(
+                        Color.White.copy(alpha = 0.6f), Offset(x, y), Size(cell, cell), CornerRadius(cardCorner),
+                        style = Stroke(w * 0.012f)
+                    )
+                }
+            }
+            if (frame == CollageFrame.SCRAPBOOK) {
+                drawRoundRect(
+                    Color(0xCCF2BFC8), Offset(x + cell * 0.3f, y - cell * 0.07f),
+                    Size(cell * 0.4f, cell * 0.15f), CornerRadius(1f)
+                )
+            }
+            val px = x + mat
+            val py = y + mat
+            val pw = cell - mat * 2
+            val ph = cell - mat * 2 - bottomExtra
+            val pc = max(cardCorner - mat, 0f)
+            drawRoundRect(
+                Brush.linearGradient(SWATCH_PHOTOS[i], Offset(px, py), Offset(px + pw, py + ph)),
+                Offset(px, py),
+                Size(pw, ph),
+                CornerRadius(pc)
+            )
+            if (frame == CollageFrame.NOIR) {
+                drawRoundRect(
+                    Color.White.copy(alpha = 0.22f), Offset(px, py), Size(pw, ph), CornerRadius(pc),
+                    style = Stroke(w * 0.01f)
+                )
+            }
+        }
+    }
+    if (frame == CollageFrame.EDITORIAL) {
+        drawRect(
+            Color(0xFF1C1C1E),
+            Offset(w * 0.08f, w * 0.08f),
+            Size(w * 0.84f, w * 0.84f),
+            style = Stroke(w * 0.012f)
         )
     }
 }
@@ -830,6 +962,9 @@ private val BACKGROUND_PRESETS = listOf(
 private fun BackgroundPanel(
     background: CollageBackground?,
     autoBackground: CollageBackground,
+    texture: CollageTexture?,
+    frame: CollageFrame,
+    onTexture: (CollageTexture?) -> Unit,
     onChange: (CollageBackground?) -> Unit
 ) {
     var stop by remember { mutableStateOf(0) }
@@ -862,6 +997,22 @@ private fun BackgroundPanel(
                 },
                 label = { Text("Gradient") }
             )
+        }
+
+        Row(
+            Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text("Texture", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            FilterChip(
+                selected = texture == null,
+                onClick = { onTexture(null) },
+                label = { Text(if (CollageGenerator.defaultTexture(frame) == CollageTexture.NONE) "Auto" else "Auto \u00B7 ${CollageGenerator.defaultTexture(frame).label}") }
+            )
+            CollageTexture.entries.forEach { tx ->
+                FilterChip(selected = texture == tx, onClick = { onTexture(tx) }, label = { Text(tx.label) })
+            }
         }
 
         Row(
@@ -948,6 +1099,16 @@ private fun TextPanel(state: MutableState<CollageText>, ink: Int) {
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
 
+        SmallLabel("Presets")
+        Row(
+            Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            TEXT_PRESETS.forEach { (name, apply) ->
+                FilterChip(selected = false, onClick = { state.value = apply(state.value) }, label = { Text(name) })
+            }
+        }
+
         SmallLabel("Font")
         Row(
             Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp),
@@ -973,6 +1134,7 @@ private fun TextPanel(state: MutableState<CollageText>, ink: Int) {
             FilterChip(t.uppercase, { state.value = state.value.copy(uppercase = !state.value.uppercase) }, { Text("CAPS") })
             FilterChip(t.shadow, { state.value = state.value.copy(shadow = !state.value.shadow) }, { Text("Shadow") })
             FilterChip(t.backdrop, { state.value = state.value.copy(backdrop = !state.value.backdrop) }, { Text("Backdrop") })
+            FilterChip(t.tape, { state.value = state.value.copy(tape = !state.value.tape) }, { Text("Tape") })
         }
 
         LabeledSlider("Size", t.sizeFraction, 0.02f..0.16f, "${(t.sizeFraction * 100).roundToInt()}") {
@@ -997,6 +1159,45 @@ private fun TextPanel(state: MutableState<CollageText>, ink: Int) {
     }
 }
 
+private val TEXT_PRESETS: List<Pair<String, (CollageText) -> CollageText>> = listOf(
+    "Tape label" to { preset: CollageText ->
+        preset.copy(
+            font = CollageFont.MONO, sizeFraction = 0.045f, tape = true, backdrop = false, uppercase = false,
+            bold = false, italic = false, shadow = false, letterSpacing = 0.02f, rotation = -2f, color = null
+        )
+    },
+    "Script" to { preset: CollageText ->
+        preset.copy(
+            font = CollageFont.SCRIPT, sizeFraction = 0.12f, tape = false, backdrop = false, uppercase = false,
+            bold = false, italic = false, shadow = true, letterSpacing = 0f, rotation = -4f
+        )
+    },
+    "Typewriter" to { preset: CollageText ->
+        preset.copy(
+            font = CollageFont.MONO, sizeFraction = 0.05f, tape = false, backdrop = false, uppercase = false,
+            bold = false, italic = false, shadow = false, letterSpacing = 0.02f, rotation = 0f
+        )
+    },
+    "Poster" to { preset: CollageText ->
+        preset.copy(
+            font = CollageFont.BLACK, sizeFraction = 0.075f, tape = false, backdrop = false, uppercase = true,
+            bold = false, italic = false, shadow = false, letterSpacing = 0.14f, rotation = 0f
+        )
+    },
+    "Editorial" to { preset: CollageText ->
+        preset.copy(
+            font = CollageFont.SERIF, sizeFraction = 0.07f, tape = false, backdrop = false, uppercase = false,
+            bold = false, italic = true, shadow = false, letterSpacing = 0.02f, rotation = 0f
+        )
+    },
+    "Caption" to { preset: CollageText ->
+        preset.copy(
+            font = CollageFont.CONDENSED, sizeFraction = 0.032f, tape = false, backdrop = true, uppercase = true,
+            bold = false, italic = false, shadow = false, letterSpacing = 0.2f, rotation = 0f
+        )
+    }
+)
+
 // =========================================================================
 // Adjust tab
 // =========================================================================
@@ -1008,6 +1209,8 @@ private fun AdjustPanel(
     onSpacing: (Int) -> Unit,
     corner: Int?,
     onCorner: (Int) -> Unit,
+    decor: CollageDecor?,
+    onDecor: (CollageDecor?) -> Unit,
     footer: Boolean,
     onFooter: (Boolean) -> Unit,
     onReset: () -> Unit
@@ -1017,6 +1220,17 @@ private fun AdjustPanel(
     val fixedCorner = CollageGenerator.hasFixedCorner(frame)
 
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(
+            Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text("Decor", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            FilterChip(selected = decor == null, onClick = { onDecor(null) }, label = { Text("Auto") })
+            CollageDecor.entries.forEach { d ->
+                FilterChip(selected = decor == d, onClick = { onDecor(d) }, label = { Text(d.label) })
+            }
+        }
         LabeledSlider("Spacing", spacingValue.toFloat(), 0f..48f, "$spacingValue") { onSpacing(it.roundToInt()) }
         LabeledSlider(
             label = if (fixedCorner) "Corners (fixed for ${frame.label})" else "Corners",
@@ -1061,6 +1275,7 @@ private fun SmallLabel(text: String) {
     )
 }
 
+/** Label + current value on top, [AppSlider] below. [steps] > 0 shows a snap dot at every allowed value. */
 @Composable
 private fun LabeledSlider(
     label: String,
@@ -1071,6 +1286,11 @@ private fun LabeledSlider(
     steps: Int = 0,
     onChange: (Float) -> Unit
 ) {
+    val snaps = remember(range, steps) {
+        if (steps <= 0) emptyList()
+        else (0..steps + 1).map { range.start + (range.endInclusive - range.start) * it / (steps + 1) }
+    }
+
     Column(Modifier.padding(horizontal = 16.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
@@ -1081,13 +1301,27 @@ private fun LabeledSlider(
             )
             Text(valueLabel, fontSize = 14.sp, fontWeight = FontWeight.Medium)
         }
-        Slider(
-            value = value.coerceIn(range.start, range.endInclusive),
-            onValueChange = onChange,
-            valueRange = range,
-            steps = steps,
-            enabled = enabled
-        )
+        Box(Modifier.alpha(if (enabled) 1f else 0.38f)) {
+            AppSlider(
+                value = value.coerceIn(range.start, range.endInclusive),
+                onValueChange = onChange,
+                valueRange = range,
+                format = { valueLabel },
+                snaps = snaps
+            )
+            if (!enabled) {
+                // AppSlider has no `enabled` flag: a transparent layer swallows the touches instead.
+                Box(
+                    Modifier
+                        .matchParentSize()
+                        .pointerInput(Unit) {
+                            awaitPointerEventScope {
+                                while (true) awaitPointerEvent().changes.forEach { it.consume() }
+                            }
+                        }
+                )
+            }
+        }
     }
 }
 
@@ -1183,7 +1417,7 @@ private fun ColorEditor(color: Int, onColor: (Int) -> Unit) {
         val hueBrush = Brush.horizontalGradient(
             listOf(0f, 60f, 120f, 180f, 240f, 300f, 360f).map { Color.hsv(it, 1f, 1f) }
         )
-        GradientSlider(h, 0f..360f, hueBrush) { emit(it, s, v) }
+        GradientSlider(h, 0f..360f, hueBrush, format = { "${it.roundToInt()}\u00B0" }) { emit(it, s, v) }
         GradientSlider(
             s, 0f..1f,
             Brush.horizontalGradient(listOf(Color.hsv(h, 0f, v), Color.hsv(h, 1f, v)))
@@ -1213,35 +1447,20 @@ private fun ColorEditor(color: Int, onColor: (Int) -> Unit) {
     }
 }
 
-/** A slider whose track shows the range of values it controls. */
+/** [AppSlider] whose track shows the range of values it controls (rainbow, saturation ramp...). */
 @Composable
 private fun GradientSlider(
     value: Float,
     range: ClosedFloatingPointRange<Float>,
     brush: Brush,
+    format: ((Float) -> String)? = null,
     onChange: (Float) -> Unit
 ) {
-    Box(Modifier.fillMaxWidth().height(32.dp), contentAlignment = Alignment.Center) {
-        Box(
-            Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 10.dp)
-                .height(12.dp)
-                .clip(RoundedCornerShape(6.dp))
-                .background(brush)
-        )
-        Slider(
-            value = value.coerceIn(range.start, range.endInclusive),
-            onValueChange = onChange,
-            valueRange = range,
-            colors = SliderDefaults.colors(
-                thumbColor = MaterialTheme.colorScheme.onSurface,
-                activeTrackColor = Color.Transparent,
-                inactiveTrackColor = Color.Transparent,
-                activeTickColor = Color.Transparent,
-                inactiveTickColor = Color.Transparent
-            ),
-            modifier = Modifier.fillMaxWidth()
-        )
-    }
+    AppSlider(
+        value = value.coerceIn(range.start, range.endInclusive),
+        onValueChange = onChange,
+        valueRange = range,
+        format = format,
+        trackBrush = brush
+    )
 }

@@ -1,4 +1,6 @@
+import com.android.build.gradle.internal.api.BaseVariantOutputImpl
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+import java.util.Properties
 
 plugins {
     id("com.android.application")
@@ -7,6 +9,13 @@ plugins {
     id("com.google.dagger.hilt.android")
     id("org.jetbrains.kotlin.kapt")
 }
+
+// Release signing details live in <project root>/keystore.properties (never commit that file).
+val keystoreProps = Properties().apply {
+    val file = rootProject.file("keystore.properties")
+    if (file.exists()) file.inputStream().use { load(it) }
+}
+val hasReleaseKeystore = keystoreProps.containsKey("storeFile")
 
 android {
     namespace = "com.acoder.gallery"
@@ -19,11 +28,41 @@ android {
         versionName = "1.0.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
+
     }
+    androidResources { noCompress += "onnx" }   // keep the model uncompressed in the APK
+
+    signingConfigs {
+        create("release") {
+            if (hasReleaseKeystore) {
+                storeFile = rootProject.file(keystoreProps.getProperty("storeFile"))
+                storePassword = keystoreProps.getProperty("storePassword")
+                keyAlias = keystoreProps.getProperty("keyAlias")
+                keyPassword = keystoreProps.getProperty("keyPassword")
+            }
+        }
+    }
+
     buildTypes {
-        release { isMinifyEnabled = true; proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro") }
+        release {
+            isMinifyEnabled = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            // Without a keystore the APK would be unsigned (and not installable).
+            if (hasReleaseKeystore) signingConfig = signingConfigs.getByName("release")
+        }
         debug { applicationIdSuffix = ".debug"; versionNameSuffix = "-debug" }
     }
+
+    // Output file name: release -> Gallery.apk, debug -> Gallery-debug.apk
+    applicationVariants.all {
+        val variant = this
+        outputs.all {
+            (this as BaseVariantOutputImpl).outputFileName =
+                if (variant.buildType.name == "release") "Gallery.apk"
+                else "Gallery-${variant.buildType.name}.apk"
+        }
+    }
+
     buildFeatures { compose = true; buildConfig = true }
     packaging { resources.excludes += "/META-INF/{AL2.0,LGPL2.1}" }
     compileOptions {
@@ -72,4 +111,10 @@ dependencies {
     implementation("androidx.exifinterface:exifinterface:1.3.7")
     implementation("androidx.paging:paging-runtime-ktx:3.5.1")
     implementation("androidx.paging:paging-compose:3.5.1")
+    implementation("androidx.media3:media3-transformer:1.10.1")
+    implementation("androidx.media3:media3-effect:1.10.1")
+    implementation("androidx.media3:media3-common:1.10.1")
+
+    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.30.0")  // confirm the latest on Maven Central
+
 }

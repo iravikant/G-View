@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Player used by the video editor. A TextureView surface resizes and composites smoothly with the Compose UI
+  around it; the default SurfaceView flickers / tears when the preview area changes size or has text drawn on top.
+-->
+<androidx.media3.ui.PlayerView xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    app:keep_content_on_player_reset="true"
+    app:resize_mode="fit"
+    app:shutter_background_color="#00000000"
+    app:surface_type="texture_view"
+    app:use_controller="false" />
