@@ -117,4 +117,6 @@ dependencies {
 
     implementation("com.microsoft.onnxruntime:onnxruntime-android:1.30.0")  // confirm the latest on Maven Central
 
+    implementation("org.tensorflow:tensorflow-lite:2.16.1")
+
 }

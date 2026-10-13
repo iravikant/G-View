@@ -72,6 +72,10 @@ import kotlin.math.cos
 import kotlin.math.floor
 import kotlin.math.roundToInt
 import kotlin.math.sin
+import com.acoder.gallery.presentation.editor.ai.AiPhotoTools
+import com.acoder.gallery.presentation.editor.ai.AiTool
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 
 // ───────────────────────── Theme ─────────────────────────
 private val PINK = Color(0xFFFFB1C1)
@@ -318,7 +322,10 @@ fun PhotoEditorScreen(uri: Uri, nav: NavHostController) {
     var saving by remember { mutableStateOf(false) }
     var selectedAuto by remember { mutableStateOf<String?>(null) }
     var selectedFilter by remember { mutableStateOf("Original") }
-
+    // AI tools
+    var aiTool by remember { mutableStateOf<AiTool?>(null) }
+    var aiProgress by remember { mutableFloatStateOf(0f) }
+    var aiJob by remember { mutableStateOf<Job?>(null) }
     // Markup + text
     val markupStrokes = remember { mutableStateListOf<MarkupStroke>() }
     var currentStroke by remember { mutableStateOf<List<Offset>?>(null) }
@@ -429,6 +436,34 @@ fun PhotoEditorScreen(uri: Uri, nav: NavHostController) {
 
     fun toast(msg: String) = Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
 
+    /** Runs an AI tool on the working photo. The result becomes the new working photo (one undo step). */
+    fun runAi(tool: AiTool) {
+        if (aiJob != null) return
+        if (!AiPhotoTools.isAvailable(context, tool)) {
+            toast("${tool.label} needs the model file assets/${tool.asset}")
+            return
+        }
+        aiTool = tool
+        aiProgress = 0f
+        aiJob = scope.launch {
+            try {
+                val result = withContext(Dispatchers.Default) {
+                    AiPhotoTools.run(context, tool, source) { aiProgress = it }
+                }
+                base = result
+                push()               // records the new pixels as an undo step, like Magic Eraser
+                toast("${tool.label} done")
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                toast(e.message ?: "${tool.label} failed")
+            } finally {
+                aiJob = null
+                aiTool = null
+            }
+        }
+    }
+
     fun resetAll() {
         state = ImageEditor.State(); straighten = 0f
         cropRect = null; draftCrop = null; cropLock = null; aspectLabel = "Free"
@@ -538,10 +573,12 @@ fun PhotoEditorScreen(uri: Uri, nav: NavHostController) {
 
     val actions = listOf(
         ActionSpec("Magic Eraser", Icons.Default.AutoFixHigh) { mode = Mode.ERASER },
-        ActionSpec("Unblur", Icons.Default.Deblur, null),
+        ActionSpec("Unblur", Icons.Default.Deblur) { runAi(AiTool.UNBLUR) },
         ActionSpec("Touch Up", Icons.Default.Face, null),
         ActionSpec("Move", Icons.Default.OpenWith, null),
-        ActionSpec("Portrait Blur", Icons.Default.BlurOn, null),
+        ActionSpec("Portrait Blur", Icons.Default.BlurOn) { runAi(AiTool.PORTRAIT) },
+        ActionSpec("Upscale", Icons.Default.ZoomOutMap) { runAi(AiTool.UPSCALE) },
+        ActionSpec("Remove BG", Icons.Default.Wallpaper) { runAi(AiTool.BACKGROUND) },
         ActionSpec("Pop", Icons.Default.AutoAwesome) {
             push(
                 state.copy(
@@ -554,7 +591,7 @@ fun PhotoEditorScreen(uri: Uri, nav: NavHostController) {
             "Sharpen",
             Icons.Default.Details
         ) { push(state.copy(sharpness = (state.sharpness + 0.3f).coerceAtMost(1f))) },
-        ActionSpec("Denoise", Icons.Default.Grain, null)
+        ActionSpec("Denoise", Icons.Default.Grain) { runAi(AiTool.DENOISE) }
     )
 
     // ─────────── Magic eraser mode (AI inpainting, see MagicEraserScreen.kt) ───────────
@@ -943,12 +980,7 @@ fun PhotoEditorScreen(uri: Uri, nav: NavHostController) {
                                 }
                             }
                         }
-                        AutoCard(
-                            "AI enhance",
-                            thumb,
-                            false,
-                            false
-                        ) { toast("AI enhance is coming soon") }
+                        AutoCard("AI enhance", thumb, false, false) { runAi(AiTool.ENHANCE) }
                     }
                 }
 
@@ -1087,6 +1119,29 @@ fun PhotoEditorScreen(uri: Uri, nav: NavHostController) {
     }
 
     if (showAddTextDialog) {
+        aiTool?.let { t ->
+            AlertDialog(
+                onDismissRequest = { },
+                containerColor = DARK,
+                title = { Text("${t.label}…", color = Color.White) },
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        LinearProgressIndicator(
+                            progress = { aiProgress },
+                            modifier = Modifier.fillMaxWidth(),
+                            color = PINK,
+                            trackColor = Color(0x33FFFFFF)
+                        )
+                        Text(
+                            "${(aiProgress * 100).roundToInt()}% · runs on your phone",
+                            color = Color(0xFF9A9099),
+                            fontSize = 13.sp
+                        )
+                    }
+                },
+                confirmButton = { TextButton({ aiJob?.cancel() }) { Text("Cancel") } }
+            )
+        }
         var draft by remember { mutableStateOf("") }
         AlertDialog(
             onDismissRequest = { showAddTextDialog = false },
@@ -1135,6 +1190,19 @@ private fun ImagePreview(
         val hPx = bmp.height * scale
         val d = LocalDensity.current
         Box(Modifier.size(with(d) { wPx.toDp() }, with(d) { hPx.toDp() })) {
+            if (bmp.hasAlpha()) {
+                Canvas(Modifier.fillMaxSize()) {
+                    val cell = 14.dp.toPx()
+                    val cols = ceil(size.width / cell).toInt()
+                    val rows = ceil(size.height / cell).toInt()
+                    for (r in 0 until rows) for (c in 0 until cols) {
+                        drawRect(
+                            if ((r + c) % 2 == 0) Color(0xFF4A4A4A) else Color(0xFF353535),
+                            Offset(c * cell, r * cell), Size(cell, cell)
+                        )
+                    }
+                }
+            }
             Image(image, null, Modifier.fillMaxSize(), contentScale = ContentScale.FillBounds)
             overlay(wPx, hPx)
         }
