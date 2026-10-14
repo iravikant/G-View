@@ -118,5 +118,7 @@ dependencies {
     implementation("com.microsoft.onnxruntime:onnxruntime-android:1.30.0")  // confirm the latest on Maven Central
 
     implementation("org.tensorflow:tensorflow-lite:2.16.1")
+    implementation("com.google.mlkit:segmentation-selfie:16.0.0-beta6")
+    implementation("com.google.android.gms:play-services-mlkit-subject-segmentation:16.0.0-beta1")
 
 }

@@ -23,6 +23,9 @@
         android:label="Gallery"
         android:supportsRtl="true"
         android:theme="@style/Theme.GalleryApp">
+        <meta-data
+            android:name="com.google.mlkit.vision.DEPENDENCIES"
+            android:value="subject_segment" />
         <activity
             android:name=".MainActivity"
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden"
