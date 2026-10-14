@@ -1,13 +1,11 @@
-import com.android.build.gradle.internal.api.BaseVariantOutputImpl
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 import java.util.Properties
 
 plugins {
     id("com.android.application")
-    id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose")
     id("com.google.dagger.hilt.android")
-    id("org.jetbrains.kotlin.kapt")
+    id("com.android.legacy-kapt")
 }
 
 // Release signing details live in <project root>/keystore.properties (never commit that file).
@@ -19,7 +17,7 @@ val hasReleaseKeystore = keystoreProps.containsKey("storeFile")
 
 android {
     namespace = "com.acoder.gallery"
-    compileSdk = 36
+    compileSdk = 37
     defaultConfig {
         applicationId = "com.acoder.gallery"
         minSdk = 26
@@ -53,16 +51,6 @@ android {
         debug { applicationIdSuffix = ".debug"; versionNameSuffix = "-debug" }
     }
 
-    // Output file name: release -> Gallery.apk, debug -> Gallery-debug.apk
-    applicationVariants.all {
-        val variant = this
-        outputs.all {
-            (this as BaseVariantOutputImpl).outputFileName =
-                if (variant.buildType.name == "release") "Gallery.apk"
-                else "Gallery-${variant.buildType.name}.apk"
-        }
-    }
-
     buildFeatures { compose = true; buildConfig = true }
     packaging { resources.excludes += "/META-INF/{AL2.0,LGPL2.1}" }
     compileOptions {
@@ -77,48 +65,56 @@ android {
     }
 }
 
+androidComponents {
+    onVariants { variant ->
+        val name = if (variant.name == "release") "Gallery.apk" else "Gallery-${variant.name}.apk"
+        variant.outputs.forEach { output ->
+            output.outputFileName.set(name)
+        }
+    }
+}
 
 kapt {
     correctErrorTypes = true
 }
 
 dependencies {
-    implementation(platform("androidx.compose:compose-bom:2026.04.01"))
-    implementation("androidx.activity:activity-compose:1.11.0")
-    implementation("androidx.core:core-ktx:1.17.0")
-    implementation("androidx.documentfile:documentfile:1.1.0")
-    implementation("androidx.lifecycle:lifecycle-runtime-compose:2.9.4")
-    implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.9.4")
-    implementation("androidx.lifecycle:lifecycle-service:2.9.4")
-    implementation("androidx.navigation:navigation-compose:2.9.7")
-    implementation("androidx.compose.ui:ui")
-    implementation("androidx.compose.ui:ui-tooling-preview")
-    implementation("androidx.compose.foundation:foundation")
-    implementation("androidx.compose.material3:material3:1.4.0")
-    implementation("androidx.compose.material:material-icons-extended")
-    debugImplementation("androidx.compose.ui:ui-tooling")
-    implementation("androidx.hilt:hilt-navigation-compose:1.2.0")
-    implementation("com.google.dagger:hilt-android:2.57.2")
-    kapt("com.google.dagger:hilt-compiler:2.57.2")
-    implementation("androidx.work:work-runtime-ktx:2.10.5")
-    implementation("androidx.datastore:datastore-preferences:1.1.7")
-    implementation("androidx.media3:media3-exoplayer:1.10.1")
-    implementation("androidx.media3:media3-ui:1.10.1")
-    implementation("androidx.media3:media3-session:1.10.1")
-    implementation("io.coil-kt.coil3:coil-compose:3.3.0")
-    implementation("io.coil-kt.coil3:coil-network-okhttp:3.3.0")
-    implementation("io.coil-kt.coil3:coil-video:3.3.0")
-    implementation("androidx.exifinterface:exifinterface:1.3.7")
-    implementation("androidx.paging:paging-runtime-ktx:3.5.1")
-    implementation("androidx.paging:paging-compose:3.5.1")
-    implementation("androidx.media3:media3-transformer:1.10.1")
-    implementation("androidx.media3:media3-effect:1.10.1")
-    implementation("androidx.media3:media3-common:1.10.1")
+    implementation(platform(libs.androidx.compose.bom))
+    implementation(libs.androidx.activity.compose)
+    implementation(libs.androidx.core.ktx)
+    implementation(libs.androidx.documentfile)
+    implementation(libs.androidx.lifecycle.runtime.compose)
+    implementation(libs.androidx.lifecycle.viewmodel.compose)
+    implementation(libs.androidx.lifecycle.service)
+    implementation(libs.androidx.navigation.compose)
+    implementation(libs.androidx.compose.ui)
+    implementation(libs.androidx.compose.ui.tooling.preview)
+    implementation(libs.androidx.compose.foundation)
+    implementation(libs.androidx.compose.material3)
+    implementation(libs.androidx.compose.material.icons.extended)
+    debugImplementation(libs.androidx.compose.ui.tooling)
+    implementation(libs.androidx.hilt.navigation.compose)
+    implementation(libs.hilt.android)
+    kapt(libs.hilt.compiler)
+    implementation(libs.androidx.work.runtime.ktx)
+    implementation(libs.androidx.datastore.preferences)
+    implementation(libs.androidx.media3.exoplayer)
+    implementation(libs.androidx.media3.ui)
+    implementation(libs.androidx.media3.session)
+    implementation(libs.coil.compose)
+    implementation(libs.coil.network.okhttp)
+    implementation(libs.coil.video)
+    implementation(libs.androidx.exifinterface)
+    implementation(libs.androidx.paging.runtime.ktx)
+    implementation(libs.androidx.paging.compose)
+    implementation(libs.androidx.media3.transformer)
+    implementation(libs.androidx.media3.effect)
+    implementation(libs.androidx.media3.common)
 
-    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.30.0")  // confirm the latest on Maven Central
+    implementation(libs.onnxruntime.android)  // confirm the latest on Maven Central
 
-    implementation("org.tensorflow:tensorflow-lite:2.16.1")
-    implementation("com.google.mlkit:segmentation-selfie:16.0.0-beta6")
-    implementation("com.google.android.gms:play-services-mlkit-subject-segmentation:16.0.0-beta1")
+    implementation(libs.tensorflow.lite)
+    implementation(libs.segmentation.selfie)
+    implementation(libs.play.services.mlkit.subject.segmentation)
 
 }
