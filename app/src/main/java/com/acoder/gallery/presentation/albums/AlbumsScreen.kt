@@ -118,8 +118,7 @@ fun AlbumsScreen(vm: HomeViewModel, nav: NavHostController) {
             Text(
                 "Albums",
                 modifier = Modifier.weight(1f),
-                fontSize = 28.sp,
-                fontWeight = FontWeight.SemiBold,
+                style = MaterialTheme.typography.headlineLarge,
                 color = MaterialTheme.colorScheme.onBackground
             )
             Box {
@@ -202,7 +201,7 @@ fun AlbumsScreen(vm: HomeViewModel, nav: NavHostController) {
 
 @Composable
 private fun AlbumTile(album: Album, onClick: () -> Unit) {
-    Column(Modifier.clickable(onClick = onClick), horizontalAlignment = Alignment.CenterHorizontally) {
+    Column(Modifier.clip(RoundedCornerShape(20.dp)).clickable(onClick = onClick), horizontalAlignment = Alignment.CenterHorizontally) {
         MediaThumb(
             album.coverUri,
             Modifier.fillMaxWidth().aspectRatio(1f).clip(RoundedCornerShape(20.dp)),
@@ -214,9 +213,9 @@ private fun AlbumTile(album: Album, onClick: () -> Unit) {
 
 @Composable
 private fun RecycleBinTile(count: Int, cover: android.net.Uri?, onClick: () -> Unit) {
-    Column(Modifier.clickable(onClick = onClick), horizontalAlignment = Alignment.CenterHorizontally) {
+    Column(Modifier.clip(RoundedCornerShape(20.dp)).clickable(onClick = onClick), horizontalAlignment = Alignment.CenterHorizontally) {
         Box(
-            Modifier.fillMaxWidth().aspectRatio(1f).clip(RoundedCornerShape(24.dp))
+            Modifier.fillMaxWidth().aspectRatio(1f).clip(RoundedCornerShape(20.dp))
                 .background(MaterialTheme.colorScheme.surfaceContainerHigh),
             contentAlignment = Alignment.Center
         ) {
@@ -240,15 +239,14 @@ private fun RecycleBinTile(count: Int, cover: android.net.Uri?, onClick: () -> U
 
 @Composable
 private fun AlbumCaption(name: String, count: String) {
-    Spacer(Modifier.height(5.dp))
+    Spacer(Modifier.height(6.dp))
     Text(
         name,
-        fontSize = 14.sp,
-        fontWeight = FontWeight.Medium,
+        style = MaterialTheme.typography.titleSmall,
         maxLines = 1,
         overflow = TextOverflow.Ellipsis,
         textAlign = TextAlign.Center,
         color = MaterialTheme.colorScheme.onBackground
     )
-    Text(count, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
+    Text(count, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
 }

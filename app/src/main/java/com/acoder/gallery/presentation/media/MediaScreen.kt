@@ -238,8 +238,7 @@ fun MediaScreen(vm: HomeViewModel, nav: NavHostController, isAlbum: Boolean = fa
                     Text(
                         "${selected.size} selected",
                         Modifier.weight(1f).padding(horizontal = 16.dp),
-                        fontSize = 22.sp,
-                        fontWeight = FontWeight.SemiBold
+                        style = MaterialTheme.typography.titleLarge
                     )
                     CircleButton(Icons.Default.SelectAll, "Select all", { vm.selectAll(snapshot.map { it.key }) })
                 }
@@ -255,8 +254,9 @@ fun MediaScreen(vm: HomeViewModel, nav: NavHostController, isAlbum: Boolean = fa
                     Text(
                         if (isAlbum) albumName.orEmpty() else "Photos",
                         modifier = Modifier.weight(1f),
-                        fontSize = 26.sp,
-                        fontWeight = FontWeight.SemiBold,
+                        style = MaterialTheme.typography.headlineMedium,
+                        maxLines = 1,
+                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                         color = MaterialTheme.colorScheme.onBackground
                     )
 
@@ -528,7 +528,7 @@ private fun BarItem(
         verticalArrangement = Arrangement.spacedBy(3.dp)
     ) {
         Icon(icon, contentDescription = label, tint = tint, modifier = Modifier.size(24.dp))
-        Text(label, fontSize = 11.sp, fontWeight = FontWeight.Medium, color = tint, maxLines = 1)
+        Text(label, style = MaterialTheme.typography.labelSmall, color = tint, maxLines = 1)
     }
 }
 
@@ -591,8 +591,8 @@ private fun SheetHeader(icon: ImageVector, title: String, subtitle: String) {
         }
         Spacer(Modifier.width(16.dp))
         Column {
-            Text(title, fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
-            Text(subtitle, fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(title, style = MaterialTheme.typography.titleLarge)
+            Text(subtitle, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }
@@ -677,8 +677,7 @@ private fun MoreActionsSheet(
             Text(
                 "$count selected",
                 Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
-                fontSize = 20.sp,
-                fontWeight = FontWeight.SemiBold
+                style = MaterialTheme.typography.titleLarge
             )
             Spacer(Modifier.height(8.dp))
             SheetActionRow(Icons.Default.GridView, "Create collage", "Combine photos into a single image", onCollage)
@@ -706,8 +705,8 @@ private fun SheetActionRow(icon: ImageVector, title: String, subtitle: String, o
         }
         Spacer(Modifier.width(16.dp))
         Column(Modifier.weight(1f)) {
-            Text(title, fontSize = 16.sp, fontWeight = FontWeight.Medium)
-            Text(subtitle, fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(title, style = MaterialTheme.typography.titleMedium)
+            Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }
@@ -718,7 +717,7 @@ private fun SortFilterSheet(vm: HomeViewModel, onDismiss: () -> Unit) {
     val filter by vm.filter.collectAsState()
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
         Column(Modifier.verticalScroll(rememberScrollState()).padding(bottom = 24.dp)) {
-            Text("Show", Modifier.padding(horizontal = 24.dp, vertical = 8.dp), fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
+            Text("Show", Modifier.padding(horizontal = 24.dp, vertical = 8.dp), style = MaterialTheme.typography.titleMedium)
             Row(
                 Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 20.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -727,14 +726,14 @@ private fun SortFilterSheet(vm: HomeViewModel, onDismiss: () -> Unit) {
                     FilterChip(selected = filter == option, onClick = { vm.setFilter(option) }, label = { Text(option.label()) })
                 }
             }
-            Text("Sort by", Modifier.padding(start = 24.dp, end = 24.dp, top = 20.dp, bottom = 4.dp), fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
+            Text("Sort by", Modifier.padding(start = 24.dp, end = 24.dp, top = 20.dp, bottom = 4.dp), style = MaterialTheme.typography.titleMedium)
             SortOrder.entries.forEach { option ->
                 Row(
                     Modifier.fillMaxWidth().combinedClickable(onClick = { vm.setSort(option) }).padding(horizontal = 16.dp, vertical = 2.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     RadioButton(selected = sort == option, onClick = { vm.setSort(option) })
-                    Text(option.label(), fontSize = 16.sp)
+                    Text(option.label(), style = MaterialTheme.typography.bodyLarge)
                 }
             }
         }

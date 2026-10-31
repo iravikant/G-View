@@ -180,11 +180,27 @@ class MediaStoreRepository @Inject constructor(@ApplicationContext private val c
         get() = Build.VERSION.SDK_INT >= 31 && MediaStore.canManageMedia(context)
 
     /** Trashed rows are hidden from plain URIs, so operations on them must opt in. */
-    private fun target(uri: Uri): Uri = if (Build.VERSION.SDK_INT >= 30) uri.buildUpon().appendQueryParameter("include_trashed", "1").build() else uri
+    private fun target(uri: Uri): Uri = uri
+
+    /** Query args that make delete/update see rows that are in the Recycle bin (Android 11+). */
+    private fun trashedArgs(): android.os.Bundle? =
+        if (Build.VERSION.SDK_INT >= 30) android.os.Bundle().apply {
+            putInt(MediaStore.QUERY_ARG_MATCH_TRASHED, MediaStore.MATCH_INCLUDE)
+        } else null
+
+    private fun deleteOne(uri: Uri): Int {
+        val args = trashedArgs()
+        return if (args != null) resolver.delete(uri, args) else resolver.delete(uri, null, null)
+    }
+
+    private fun updateOne(uri: Uri, values: ContentValues): Int {
+        val args = trashedArgs()
+        return if (args != null) resolver.update(uri, values, args) else resolver.update(uri, values, null, null)
+    }
 
     override suspend fun delete(items: List<MediaItem>): Int = withContext(Dispatchers.IO) {
         var n = 0
-        items.forEach { try { if (resolver.delete(target(it.uri), null, null) > 0) n++ } catch (_: Exception) { } }
+        items.forEach { try { if (deleteOne(it.uri) > 0) n++ } catch (_: Exception) { } }
         n
     }
 
@@ -214,7 +230,7 @@ class MediaStoreRepository @Inject constructor(@ApplicationContext private val c
         if (canManageMedia) {
             val values = ContentValues().apply { put("is_trashed", if (trashed) 1 else 0) }
             var n = 0
-            items.forEach { try { if (resolver.update(target(it.uri), values, null, null) > 0) n++ } catch (_: Exception) { } }
+            items.forEach { try { if (updateOne(it.uri, values) > 0) n++ } catch (_: Exception) { } }
             if (n > 0) return@withContext MediaOpResult.Done(n)
         }
         try {

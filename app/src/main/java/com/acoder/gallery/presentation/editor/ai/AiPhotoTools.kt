@@ -69,6 +69,16 @@ object AiPhotoTools {
     internal fun hasAsset(context: Context, asset: String): Boolean =
         try { context.assets.open(asset).use { }; true } catch (_: Exception) { false }
 
+    suspend fun subjectConfidence(work: Bitmap): FloatArray {
+        return try {
+            MlKit.subject(work)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Throwable) {
+            MlKit.selfie(work)
+        }
+    }
+
     suspend fun run(context: Context, tool: AiTool, src: Bitmap, onProgress: (Float) -> Unit): Bitmap {
         currentCoroutineContext().ensureActive()
         return when (tool) {
@@ -684,6 +694,9 @@ private object MlKit {
 
 private object Refiner {
 
+    /** A hole inside the subject is kept as subject when the model's average confidence in it is at least this. */
+    private const val HOLE_CONFIDENCE = 0.25f
+
     /**
      * 1. Drop stray blobs (a picture frame on the wall) and keep the main subject(s).
      * 2. Fill small holes inside the subject (gaps in hair, between fingers and a bangle).
@@ -694,8 +707,9 @@ private object Refiner {
         val w = work.width
         val h = work.height
         val n = w * h
-        val m = FloatArray(n) { mask[it].coerceIn(0f, 1f) }
-        cleanup(m, w, h)
+        val orig = FloatArray(n) { mask[it].coerceIn(0f, 1f) }
+        val m = orig.copyOf()
+        cleanup(m, orig, w, h)
 
         val px = IntArray(n)
         work.getPixels(px, 0, w, 0, 0, w, h)
@@ -704,7 +718,9 @@ private object Refiner {
             (0.299f * ((p shr 16) and 255) + 0.587f * ((p shr 8) and 255) + 0.114f * (p and 255)) / 255f
         }
         val r = (min(w, h) / 100).coerceIn(4, 14)
-        val q = guided(guide, m, w, h, r, 2e-4f)
+        // two passes: a wide one to follow the body outline, then a tight one to catch fine detail (hair, jewellery)
+        val coarse = guided(guide, m, w, h, r, 2e-4f)
+        val q = guided(guide, coarse, w, h, max(2, r / 3), 1e-4f)
         for (i in 0 until n) {
             val s = ((q[i] - 0.3f) / 0.45f).coerceIn(0f, 1f)
             q[i] = s * s * (3f - 2f * s)
@@ -748,7 +764,7 @@ private object Refiner {
         return Comps(labels, areas.toIntArray(), borders.toBooleanArray(), next)
     }
 
-    private fun cleanup(m: FloatArray, w: Int, h: Int) {
+    private fun cleanup(m: FloatArray, orig: FloatArray, w: Int, h: Int) {
         val n = w * h
         val fg = components(BooleanArray(n) { m[it] > 0.5f }, true, w, h)
         var biggest = 0
@@ -762,12 +778,20 @@ private object Refiner {
         val grown = box(keepF, w, h, max(6, min(w, h) / 80))
         for (i in 0 until n) if (grown[i] < 0.001f) m[i] = 0f
 
-        // fill small holes that are completely inside the subject
+        // Holes completely inside the subject. A hole is filled only when it is tiny, or when the model itself was
+        // unsure about it (average confidence >= 0.25), so it is probably subject (a patterned sari, jewellery).
+        // A real gap that the model was sure about (between an arm and the body) stays transparent.
         val bg = components(BooleanArray(n) { m[it] <= 0.5f }, true, w, h)
-        val maxHole = n * 0.004f
+        val sum = FloatArray(bg.count + 1)
+        for (i in 0 until n) { val l = bg.labels[i]; if (l != 0) sum[l] += orig[i] }
+        val tinyHole = n * 0.0003f
+        val smallHole = n * 0.006f
         for (i in 0 until n) {
             val l = bg.labels[i]
-            if (l != 0 && !bg.touchesBorder[l] && bg.area[l] < maxHole) m[i] = 1f
+            if (l == 0 || bg.touchesBorder[l]) continue
+            val area = bg.area[l]
+            val unsure = area < smallHole && sum[l] / area >= HOLE_CONFIDENCE
+            if (area < tinyHole || unsure) m[i] = 1f
         }
     }
 

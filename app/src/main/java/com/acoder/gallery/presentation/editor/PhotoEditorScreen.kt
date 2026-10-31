@@ -14,6 +14,7 @@ import android.graphics.RectF
 import android.media.ExifInterface
 import android.net.Uri
 import android.provider.MediaStore
+import android.util.Log
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
@@ -498,49 +499,54 @@ fun PhotoEditorScreen(uri: Uri, nav: NavHostController) {
     }
 
     fun save() {
-        if (saving) return
+        // One save at a time, and not while an AI tool is still working on the photo
+        if (saving || aiJob != null) return
         saving = true
         scope.launch {
-            val strokes = markupStrokes.toList();
-            val texts = textOverlays.toList();
-            val st = state;
-            val ang = straighten;
+            val strokes = markupStrokes.toList()
+            val texts = textOverlays.toList()
+            val st = state
+            val ang = straighten
             val crp = cropRect
             val rs = resize
             var info: String? = null
+
             val saved: Uri? = try {
                 withContext(Dispatchers.Default) {
-                    val full = cropBitmap(
-                        straightenBitmap(
-                            ImageEditor(source).render(st.copy(crop = null)),
-                            ang
-                        ), crp
-                    )
+                    val full = cropBitmap(straightenBitmap(ImageEditor(source).render(st.copy(crop = null)), ang), crp)
                     val out = bakeOverlays(full, strokes, texts)
                     val u: Uri? = if (rs.enabled) {
-                        // Resize + chosen format / quality
                         val (tw, th) = rs.target(out.width, out.height)
                         val scaled = resampleHighQuality(out, tw, th)
                         val result = saveBitmapAs(context, scaled, rs.format, rs.quality)
                         if (scaled !== out) scaled.recycle()
-                        if (result != null) info =
-                            "Saved ${result.width} × ${result.height} · ${fmtBytes(result.bytes)}"
+                        if (result != null) info = "Saved ${result.width} × ${result.height} · ${fmtBytes(result.bytes)}"
                         result?.uri
                     } else {
-                        saveBitmap(context, out)
+                        saveBitmap(context, out)     // PNG, keeps a transparent background
                     }
                     out.recycle()
                     u
                 }
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Throwable) {
+                Log.e("PhotoEditor", "Saving failed", e)
                 null
             }
-            saving = false
+
             if (saved == null) {
+                saving = false
                 toast("Could not save the photo")
                 return@launch
             }
-            info?.let { toast(it) }
+
+            toast(info ?: "Photo saved")
+
+            // Give the new photo's address to the screen we came from (the media viewer), then leave the editor.
+            nav.previousBackStackEntry?.savedStateHandle?.set(EDITOR_RESULT_KEY, saved.toString())
+            nav.popBackStack()
+            saving = false
         }
     }
     /*  fun save() {

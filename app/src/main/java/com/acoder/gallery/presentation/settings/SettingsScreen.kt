@@ -70,7 +70,7 @@ import com.acoder.gallery.presentation.common.label
 import com.acoder.gallery.presentation.home.HomeViewModel
 import kotlinx.coroutines.delay
 
-private val CardShape = RoundedCornerShape(28.dp)
+private val CardShape = RoundedCornerShape(24.dp)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -230,12 +230,13 @@ private fun SettingsGroup(title: String, content: @Composable ColumnScope.() -> 
             style = MaterialTheme.typography.labelLarge,
             fontWeight = FontWeight.SemiBold,
             color = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.padding(start = 12.dp, bottom = 8.dp)
+            modifier = Modifier.padding(start = 16.dp, bottom = 8.dp)
         )
         Surface(
             shape = CardShape,
             color = MaterialTheme.colorScheme.surfaceContainer,
-            tonalElevation = 0.dp
+            tonalElevation = 0.dp,
+            border = androidx.compose.foundation.BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
         ) {
             Column(content = content)
         }
@@ -256,8 +257,8 @@ private fun Modifier.pressable(onClick: () -> Unit): Modifier {
     val source = remember { MutableInteractionSource() }
     val pressed by source.collectIsPressedAsState()
     val s by animateFloatAsState(
-        if (pressed) 0.98f else 1f,
-        spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMedium),
+        if (pressed) 0.985f else 1f,
+        spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMedium),
         label = "press"
     )
     return this
@@ -270,8 +271,8 @@ private fun IconChip(icon: ImageVector, tint: Color, size: Dp = 44.dp) {
     Box(
         Modifier
             .size(size)
-            .clip(RoundedCornerShape(14.dp))
-            .background(tint.copy(alpha = 0.14f)),
+            .clip(RoundedCornerShape(12.dp))
+            .background(tint.copy(alpha = 0.12f)),
         contentAlignment = Alignment.Center
     ) {
         Icon(icon, null, tint = tint, modifier = Modifier.size(24.dp))

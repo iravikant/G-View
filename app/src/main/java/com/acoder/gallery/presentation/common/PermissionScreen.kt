@@ -32,22 +32,22 @@ fun PermissionScreen(context: Context, onGranted: () -> Unit) {
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Box(
-            Modifier.size(96.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primaryContainer),
+            Modifier.size(104.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primaryContainer),
             contentAlignment = Alignment.Center
         ) {
-            Icon(Icons.Default.PhotoLibrary, null, Modifier.size(44.dp), tint = MaterialTheme.colorScheme.onPrimaryContainer)
+            Icon(Icons.Default.PhotoLibrary, null, Modifier.size(48.dp), tint = MaterialTheme.colorScheme.onPrimaryContainer)
         }
         Spacer(Modifier.height(24.dp))
-        Text("Welcome to Gallery", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold, textAlign = TextAlign.Center)
+        Text("Welcome to Gallery", style = MaterialTheme.typography.headlineMedium, textAlign = TextAlign.Center)
         Spacer(Modifier.height(10.dp))
         Text(
             "View, edit and organize your photos and videos — entirely on this device. Nothing is ever uploaded.",
-            style = MaterialTheme.typography.bodyMedium,
+            style = MaterialTheme.typography.bodyLarge,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center
         )
         Spacer(Modifier.height(32.dp))
-        Button(onClick = { launcher.launch(com.acoder.gallery.core.permissions.PermissionManager.permissions()) }, Modifier.fillMaxWidth()) {
+        Button(onClick = { launcher.launch(com.acoder.gallery.core.permissions.PermissionManager.permissions()) }, Modifier.fillMaxWidth().height(52.dp)) {
             Text("Allow access to Photos & Videos")
         }
         Spacer(Modifier.height(8.dp))

@@ -170,7 +170,7 @@ fun GalleryApp(vm: HomeViewModel = hiltViewModel()) {
                 ) { backStackEntry ->
                     val encoded = backStackEntry.arguments?.getString("uri").orEmpty()
                     Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).systemBarsPadding()) {
-                        PhotoEditorScreen(Uri.parse(encoded), nav)
+                        PhotoEditorScreen(com.acoder.gallery.presentation.editor.EditorRoutes.decode(encoded) ?: Uri.parse(encoded), nav)
                     }
                 }
                 composable(

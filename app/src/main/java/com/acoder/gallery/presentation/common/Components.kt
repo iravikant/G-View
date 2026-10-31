@@ -3,8 +3,11 @@
 package com.acoder.gallery.presentation.common
 
 import android.net.Uri
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -31,6 +34,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.VerticalDivider
 import android.app.Activity
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowCompat
@@ -43,6 +47,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -75,8 +82,9 @@ fun CircleButton(
         onClick = onClick,
         modifier = modifier
             .size(size)
-            .then(if (raised) Modifier.shadow(6.dp, CircleShape) else Modifier)
+            .then(if (raised) Modifier.shadow(8.dp, CircleShape, ambientColor = Color.Black.copy(alpha = 0.25f), spotColor = Color.Black.copy(alpha = 0.25f)) else Modifier)
             .background(MaterialTheme.colorScheme.surfaceContainerHigh, CircleShape)
+            .border(0.5.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f), CircleShape)
     ) {
         Icon(icon, description, Modifier.size(if (size > 50.dp) 26.dp else 22.dp), tint = MaterialTheme.colorScheme.onSurface)
     }
@@ -108,24 +116,35 @@ fun FloatingBottomBar(
         Surface(
             shape = CircleShape,
             color = MaterialTheme.colorScheme.surfaceContainerHigh,
-            shadowElevation = 6.dp
+            shadowElevation = 8.dp,
+            border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f))
         ) {
             Row(Modifier.padding(6.dp)) {
                 tabs.forEachIndexed { index, label ->
                     val isSelected = index == selected
+                    val container by animateColorAsState(
+                        if (isSelected) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent,
+                        tween(220), label = "tabContainer"
+                    )
+                    val content by animateColorAsState(
+                        if (isSelected) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
+                        tween(220), label = "tabContent"
+                    )
                     Box(
                         Modifier
                             .clip(CircleShape)
-                            .background(if (isSelected) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent)
-                            .clickable { onSelect(index) }
+                            .background(container)
+                            .clickable(role = Role.Tab) { onSelect(index) }
+                            .semantics { contentDescription = if (isSelected) "$label, selected" else label }
                             .padding(horizontal = 24.dp, vertical = 12.dp),
                         contentAlignment = Alignment.Center
                     ) {
                         Text(
                             label,
-                            fontSize = 17.sp,
+                            style = MaterialTheme.typography.titleMedium,
+                            fontSize = 16.sp,
                             fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Medium,
-                            color = if (isSelected) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onSurface
+                            color = content
                         )
                     }
                 }
@@ -142,9 +161,10 @@ data class BarAction(val icon: ImageVector, val label: String, val onClick: () -
 fun FloatingActionPill(actions: List<BarAction>, modifier: Modifier = Modifier) {
     Box(modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = 10.dp, vertical = 8.dp), contentAlignment = Alignment.Center) {
         Surface(
-            shape = RoundedCornerShape(25.dp),
+            shape = RoundedCornerShape(28.dp),
             color = MaterialTheme.colorScheme.surfaceContainerHigh,
-            shadowElevation = 8.dp
+            shadowElevation = 10.dp,
+            border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f))
         ) {
             Row(Modifier.padding(horizontal = 8.dp, vertical = 5.dp), horizontalArrangement = Arrangement.spacedBy(2.dp)) {
                 actions.forEach { action ->
@@ -152,13 +172,13 @@ fun FloatingActionPill(actions: List<BarAction>, modifier: Modifier = Modifier) 
                     Column(
                         Modifier
                             .clip(RoundedCornerShape(24.dp))
-                            .clickable(onClick = action.onClick)
-                            .padding(horizontal = 14.dp, vertical = 5.dp),
+                            .clickable(role = Role.Button, onClick = action.onClick)
+                            .padding(horizontal = 14.dp, vertical = 6.dp),
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
-                        Icon(action.icon, action.label, Modifier.size(24.dp), tint = tint)
+                        Icon(action.icon, null, Modifier.size(24.dp), tint = tint)
                         Spacer(Modifier.height(2.dp))
-                        Text(action.label, fontSize = 11.sp, color = tint, maxLines = 1)
+                        Text(action.label, style = MaterialTheme.typography.labelSmall, color = tint, maxLines = 1)
                     }
                 }
             }
@@ -195,28 +215,26 @@ fun GalleryDialog(
                     title,
                     Modifier.fillMaxWidth().padding(start = 24.dp, end = 24.dp, top = 28.dp),
                     textAlign = TextAlign.Center,
-                    fontSize = 20.sp,
-                    fontWeight = FontWeight.Medium,
+                    style = MaterialTheme.typography.titleLarge,
                     color = MaterialTheme.colorScheme.onSurface
                 )
                 Text(
                     message,
-                    Modifier.padding(start = 24.dp, end = 24.dp, top = 18.dp, bottom = 22.dp),
-                    fontSize = 16.sp,
-                    lineHeight = 24.sp,
-                    color = MaterialTheme.colorScheme.onSurface
+                    Modifier.fillMaxWidth().padding(start = 24.dp, end = 24.dp, top = 14.dp, bottom = 24.dp),
+                    textAlign = TextAlign.Center,
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
                 Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min)) {
                     TextButton(onDismiss, Modifier.weight(1f).height(56.dp), shape = RoundedCornerShape(0.dp)) {
-                        Text(cancelLabel, fontSize = 17.sp, fontWeight = FontWeight.Medium, color = MaterialTheme.colorScheme.primary)
+                        Text(cancelLabel, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
                     }
                     VerticalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
                     TextButton(onConfirm, Modifier.weight(1f).height(56.dp), shape = RoundedCornerShape(0.dp)) {
                         Text(
                             confirmLabel,
-                            fontSize = 17.sp,
-                            fontWeight = FontWeight.Medium,
+                            style = MaterialTheme.typography.titleMedium,
                             color = if (destructive) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
                         )
                     }
@@ -249,11 +267,10 @@ fun MediaBadge(text: String, modifier: Modifier = Modifier) {
     Text(
         text,
         modifier
-            .background(Color.Black.copy(alpha = 0.55f), CircleShape)
-            .padding(horizontal = 7.dp, vertical = 2.dp),
+            .background(Color.Black.copy(alpha = 0.6f), CircleShape)
+            .padding(horizontal = 8.dp, vertical = 3.dp),
         color = Color.White,
-        fontSize = 11.sp,
-        fontWeight = FontWeight.Medium,
+        style = MaterialTheme.typography.labelSmall,
         maxLines = 1,
         overflow = TextOverflow.Clip
     )
@@ -262,13 +279,17 @@ fun MediaBadge(text: String, modifier: Modifier = Modifier) {
 /** Round check marker in a tile's corner while selecting. */
 @Composable
 fun SelectionBadge(isSelected: Boolean, modifier: Modifier = Modifier) {
+    val fill by animateColorAsState(
+        if (isSelected) MaterialTheme.colorScheme.primary else Color.Black.copy(alpha = 0.35f),
+        tween(150), label = "selectionFill"
+    )
     Surface(
-        modifier.size(22.dp),
+        modifier.size(24.dp),
         shape = CircleShape,
-        color = if (isSelected) MaterialTheme.colorScheme.primary else Color.Black.copy(alpha = 0.35f),
+        color = fill,
         border = if (!isSelected) BorderStroke(1.5.dp, Color.White.copy(alpha = 0.9f)) else null
     ) {
-        if (isSelected) Icon(Icons.Default.Check, null, Modifier.padding(3.dp), tint = MaterialTheme.colorScheme.onPrimary)
+        if (isSelected) Icon(Icons.Default.Check, null, Modifier.padding(4.dp), tint = MaterialTheme.colorScheme.onPrimary)
     }
 }
 
@@ -278,9 +299,9 @@ fun LargeTitle(text: String, modifier: Modifier = Modifier) {
     Text(
         text,
         modifier,
+        style = MaterialTheme.typography.headlineLarge,
         fontSize = 34.sp,
         lineHeight = 40.sp,
-        fontWeight = FontWeight.SemiBold,
         maxLines = 1,
         overflow = TextOverflow.Ellipsis,
         color = MaterialTheme.colorScheme.onBackground
@@ -292,9 +313,8 @@ fun LargeTitle(text: String, modifier: Modifier = Modifier) {
 fun SectionTitle(text: String, modifier: Modifier = Modifier) {
     Text(
         text,
-        modifier.padding(top = 18.dp, bottom = 10.dp),
-        fontSize = 20.sp,
-        fontWeight = FontWeight.SemiBold,
+        modifier.padding(top = 20.dp, bottom = 10.dp),
+        style = MaterialTheme.typography.titleLarge,
         color = MaterialTheme.colorScheme.onBackground
     )
 }
